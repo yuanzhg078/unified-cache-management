@@ -8,6 +8,10 @@ target_include_directories(asu_transport
         ${CMAKE_CURRENT_SOURCE_DIR}/trans/src
         ${UCM_ROOT_DIR}/ucm/shared/infra
 )
+set(ASU_HCOMM_INCLUDE_DIR "" CACHE PATH "Path that contains hcomm/hcomm_res_defs.h")
+if(ASU_HCOMM_INCLUDE_DIR)
+    target_include_directories(asu_transport PRIVATE ${ASU_HCOMM_INCLUDE_DIR})
+endif()
 target_link_libraries(asu_transport PUBLIC pthread)
 
 file(GLOB ASU_CLIENT_SOURCES CONFIGURE_DEPENDS client/src/*.cpp)

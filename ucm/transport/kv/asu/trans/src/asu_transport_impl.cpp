@@ -24,12 +24,46 @@
 #include "asu_transport_impl.h"
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <thread>
+#include <unordered_map>
+#include <utility>
 #include "asu_transport/asu_transport.h"
 #include "asu_transport/types.h"
 
 namespace UC::ASU {
+namespace {
+
+std::string ProtocolToString(Protocol protocol)
+{
+    switch (protocol) {
+        case Protocol::UB:
+            return "ub";
+        case Protocol::ROCE:
+            return "roce";
+        case Protocol::TCP:
+            return "tcp";
+        default:
+            return "roce";
+    }
+}
+
+void MergeAttrs(std::unordered_map<std::string, std::string>& dst,
+                const std::unordered_map<std::string, std::string>& src)
+{
+    for (const auto& item : src) { dst[item.first] = item.second; }
+}
+
+void SetAttrIfMissing(std::unordered_map<std::string, std::string>& attrs,
+                      const std::string& key, std::string value)
+{
+    if (value.empty()) { return; }
+    if (attrs.find(key) == attrs.end()) { attrs.emplace(key, std::move(value)); }
+}
+
+}  // namespace
 
 AsuTransportImpl::~AsuTransportImpl() { Shutdown(); }
 
@@ -38,6 +72,9 @@ Status AsuTransportImpl::Init(const TransportConfig& config)
     if (worker_.joinable()) { return Status::OK(); }
 
     config_ = config;
+    auto status = InitConnections();
+    if (!status.ok()) { return status; }
+
     auto queue_depth =
         std::max<std::size_t>(2, static_cast<std::size_t>(config_.max_inflight_tasks));
     execute_queue_.Setup(queue_depth + 1);
@@ -48,6 +85,7 @@ Status AsuTransportImpl::Init(const TransportConfig& config)
 
 Status AsuTransportImpl::Shutdown()
 {
+    ShutdownConnections();
     if (!worker_.joinable()) { return Status::OK(); }
 
     // TODO: Drain task queue and fail all pending tasks
@@ -55,6 +93,87 @@ Status AsuTransportImpl::Shutdown()
     stop_.store(true, std::memory_order_release);
     if (worker_.joinable()) { worker_.join(); }
     return Status::OK();
+}
+
+std::uint32_t AsuTransportImpl::SelectEndpointQpNum(const TransportConfig& config)
+{
+    return std::max({config.query_qp_num, config.load_qp_num, config.store_qp_num});
+}
+
+Status AsuTransportImpl::InitConnections()
+{
+    if (!config_.preconnect) { return Status::OK(); }
+
+    connection_manager_ = CreateConnectionManager(
+        ConnectionManagerConfig{ConnectionBackendType::HCOMM, config_.attrs});
+    if (!connection_manager_) {
+        return Status::Error(StatusCode::INTERNAL_ERROR, "connection manager is null");
+    }
+    auto status = connection_manager_->Initialize();
+    if (!status.ok()) {
+        connection_manager_.reset();
+        return status;
+    }
+
+    endpoint_connections_.clear();
+    endpoint_connections_.reserve(config_.endpoints.size());
+    const auto qp_num = SelectEndpointQpNum(config_);
+    const auto timeout_ms = static_cast<std::uint32_t>(
+        std::max({config_.query_timeout_ms, config_.load_timeout_ms, config_.store_timeout_ms}));
+
+    for (const auto& endpoint : config_.endpoints) {
+        auto merged_attrs = config_.attrs;
+        MergeAttrs(merged_attrs, endpoint.attrs);
+        SetAttrIfMissing(merged_attrs, "protocol", ProtocolToString(endpoint.protocol));
+        SetAttrIfMissing(merged_attrs, "remote_comm_id", endpoint.ip);
+        SetAttrIfMissing(merged_attrs, "remote_ip", endpoint.ip);
+        if (endpoint.port != 0) {
+            SetAttrIfMissing(merged_attrs, "port", std::to_string(endpoint.port));
+        }
+        if (endpoint.device_id >= 0) {
+            SetAttrIfMissing(merged_attrs, "remote_phy_device_id",
+                             std::to_string(static_cast<std::uint64_t>(endpoint.device_id)));
+        }
+
+        auto local_ip_it = merged_attrs.find("local_ip");
+        const std::string local_ip =
+            local_ip_it == merged_attrs.end() ? std::string{} : local_ip_it->second;
+        const auto remote_ip = endpoint.ip;
+        const auto port = endpoint.port;
+
+        EndpointConnection endpoint_connection;
+        endpoint_connection.endpoint = endpoint;
+        CreateConnectionRequest request;
+        request.local_ip = local_ip;
+        request.remote_ip = remote_ip;
+        request.port = port;
+        request.qp_num = qp_num;
+        request.timeout_ms = timeout_ms;
+        request.attrs = std::move(merged_attrs);
+        status = connection_manager_->CreateConnection(request, endpoint_connection.handles);
+        if (!status.ok()) {
+            ShutdownConnections();
+            return status;
+        }
+
+        endpoint_connections_.emplace_back(std::move(endpoint_connection));
+    }
+    return Status::OK();
+}
+
+void AsuTransportImpl::ShutdownConnections()
+{
+    if (connection_manager_) {
+        for (auto& endpoint_connection : endpoint_connections_) {
+            if (!endpoint_connection.handles.empty()) {
+                (void)connection_manager_->DeleteConnections(endpoint_connection.handles);
+                endpoint_connection.handles.clear();
+            }
+        }
+        connection_manager_->Finalize();
+        connection_manager_.reset();
+    }
+    endpoint_connections_.clear();
 }
 
 Status AsuTransportImpl::CheckHealth()

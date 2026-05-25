@@ -28,7 +28,9 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 #include "asu_transport/asu_transport.h"
+#include "asu_transport/connection_manager.h"
 #include "template/spsc_ring_queue.h"
 #include "transport_task_manager.h"
 
@@ -65,13 +67,23 @@ public:
     Status UnregisterRegions(const std::vector<MRHandle>& handles) override;
 
 private:
+    struct EndpointConnection {
+        AsuEndpoint endpoint;
+        std::vector<ConnectionHandle> handles;
+    };
+
     using TransportTaskContextPtr = std::shared_ptr<TransportTaskContext>;
+    Status InitConnections();
+    void ShutdownConnections();
+    static std::uint32_t SelectEndpointQpNum(const TransportConfig& config);
     Status SubmitAsync(std::unique_ptr<TransportTaskContext> ctx, TaskId& task_id);
     void WorkerLoop();
     void CompleteTask(const TransportTaskContextPtr& ctx);
     void BuildResult(const TransportTaskContext& ctx, TaskResult& result);
 
     TransportConfig config_;
+    std::unique_ptr<ConnectionManager> connection_manager_;
+    std::vector<EndpointConnection> endpoint_connections_;
 
     TransportTaskManager task_manager_;
     // TODO: optimize spsc pattern or just submit to RDMA/UB directly ?
