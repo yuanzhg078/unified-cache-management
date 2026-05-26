@@ -30,13 +30,18 @@ target_link_libraries(asu_client PUBLIC asu_transport pthread)
 
 if(BUILD_UNIT_TESTS)
     include(GoogleTest)
-    file(GLOB_RECURSE ASU_TEST_SOURCE_FILES CONFIGURE_DEPENDS test/case/*.cc)
+    file(GLOB_RECURSE ASU_TEST_SOURCE_FILES CONFIGURE_DEPENDS test/*.cc)
     add_executable(asu.test ${ASU_TEST_SOURCE_FILES})
+    set_target_properties(asu.test PROPERTIES ENABLE_EXPORTS ON)
     target_include_directories(asu.test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/common
         ${CMAKE_CURRENT_SOURCE_DIR}/client/src
         ${CMAKE_CURRENT_SOURCE_DIR}/trans/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/test/stub
     )
+    if(ASU_HCOMM_INCLUDE_DIR)
+        target_include_directories(asu.test PRIVATE ${ASU_HCOMM_INCLUDE_DIR})
+    endif()
     target_link_libraries(asu.test PRIVATE
         asu_client
         gtest_main gtest

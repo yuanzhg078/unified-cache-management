@@ -70,6 +70,7 @@ enum class CtrlMsgType : std::int32_t {
     kGetRemoteMemResp = 4,
     kMatchEndpointReq = 9,
     kMatchEndpointResp = 10,
+    kDestroyChannelReq = 11,
 };
 
 struct MatchEndpointReq {
@@ -97,11 +98,25 @@ struct GetRemoteMemReq {
     std::uint64_t dst_ep_handle{0};
 };
 
+struct DestroyChannelReq {
+    std::uint64_t endpoint_handle{0};
+    std::uint64_t channel_handle{0};
+};
+
 struct RemoteMemDesc {
     CommMem memory{};
     std::string tag;
     std::vector<std::uint8_t> export_desc;
 };
+
+static_assert(sizeof(CtrlMsgHeader) == sizeof(std::uint32_t) + sizeof(std::uint64_t),
+              "CtrlMsgHeader must match hixl wire format");
+static_assert(sizeof(CtrlMsgType) == sizeof(std::int32_t),
+              "CtrlMsgType must match hixl wire format");
+static_assert(sizeof(MatchEndpointResp::result) == sizeof(std::uint32_t),
+              "hixl Status must be uint32_t on the wire");
+static_assert(sizeof(CreateChannelResp::result) == sizeof(std::uint32_t),
+              "hixl Status must be uint32_t on the wire");
 
 class CtrlMsgPlugin {
 public:
@@ -560,6 +575,15 @@ Status RecvFixedControlMessage(int fd, CtrlMsgType expected, T& message, std::ui
     }
     std::memcpy(&message, body.data() + sizeof(CtrlMsgType), sizeof(T));
     return Status::OK();
+}
+
+Status SendDestroyChannelRequest(int fd, std::uint64_t remote_endpoint_handle,
+                                 ChannelHandle channel_handle)
+{
+    (void)channel_handle;
+    DestroyChannelReq request{};
+    request.endpoint_handle = remote_endpoint_handle;
+    return SendControlMessage(fd, CtrlMsgType::kDestroyChannelReq, request, 0);
 }
 
 Status CtrlMsgPlugin::Connect(const std::string& ip, std::uint32_t port, int& fd,
@@ -1283,23 +1307,36 @@ Status HcommBackend::DestroyOneConnection(ConnectionHandle handle)
     auto conn = it->second;
     connections_.erase(it);
     Status first = Status::OK();
+    auto endpoint = conn.endpoint;
+    ConnectionEndpointHandle owning_endpoint_handle = kInvalidConnectionEndpointHandle;
+    for (const auto& item : endpoints_) {
+        if (item.second == endpoint) {
+            owning_endpoint_handle = item.first;
+            break;
+        }
+    }
+    if (conn.control_fd >= 0) {
+        std::uint64_t remote_endpoint_handle = 0;
+        auto remote_it = remote_endpoint_handles_.find(owning_endpoint_handle);
+        if (remote_it != remote_endpoint_handles_.end()) {
+            remote_endpoint_handle = remote_it->second;
+        }
+        (void)SendDestroyChannelRequest(conn.control_fd, remote_endpoint_handle,
+                                        conn.channel_handle);
+    }
     if (conn.owns_channel && conn.channel_handle != 0 && conn.endpoint) {
         auto status = conn.endpoint->DestroyChannel(conn.channel_handle);
         if (!status.ok() && first.ok()) { first = status; }
     }
-    auto endpoint = std::move(conn.endpoint);
     if (conn.control_fd >= 0) {
-        for (auto ep_it = endpoints_.begin(); ep_it != endpoints_.end(); ++ep_it) {
-            if (ep_it->second != endpoint) { continue; }
-            auto socket_it = endpoint_sockets_.find(ep_it->first);
-            if (socket_it == endpoint_sockets_.end()) { break; }
+        auto socket_it = endpoint_sockets_.find(owning_endpoint_handle);
+        if (socket_it != endpoint_sockets_.end()) {
             auto& sockets = socket_it->second;
             auto fd_it = std::find(sockets.begin(), sockets.end(), conn.control_fd);
             if (fd_it != sockets.end()) {
                 CloseFd(*fd_it);
                 sockets.erase(fd_it);
             }
-            break;
         }
     }
     bool endpoint_in_use = false;
