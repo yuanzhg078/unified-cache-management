@@ -60,6 +60,7 @@ HcommEndpoint::~HcommEndpoint()
 
 Status HcommEndpoint::Initialize()
 {
+    std::lock_guard<std::mutex> lock(mu_);
     if (initialized_) { return Status::OK(); }
 
     auto ret = HcommProxy::EndpointCreate(&local_endpoint_, &endpoint_handle_);
@@ -81,6 +82,7 @@ Status HcommEndpoint::Initialize()
 
 Status HcommEndpoint::Finalize()
 {
+    std::lock_guard<std::mutex> lock(mu_);
     Status first = Status::OK();
     for (auto channel_handle : channels_) {
         auto channel = channel_handle;
@@ -124,6 +126,7 @@ Status HcommEndpoint::CreateChannels(std::uint32_t port, std::uint32_t channel_n
                                      std::uint32_t hccs_qos,
                                      std::vector<ChannelHandle>& channel_handles)
 {
+    std::lock_guard<std::mutex> lock(mu_);
     if (!initialized_) {
         return Status::Error(StatusCode::NOT_INITIALIZED, "hcomm endpoint is not initialized");
     }
@@ -169,8 +172,46 @@ Status HcommEndpoint::CreateChannels(std::uint32_t port, std::uint32_t channel_n
     return Status::OK();
 }
 
+Status HcommEndpoint::CreateChannel(std::uint32_t port, std::uint8_t tc, std::uint8_t sl,
+                                    std::uint32_t hccs_qos, std::uint32_t channel_index,
+                                    ChannelHandle& channel_handle)
+{
+    std::lock_guard<std::mutex> lock(mu_);
+    channel_handle = 0;
+    if (!initialized_) {
+        return Status::Error(StatusCode::NOT_INITIALIZED, "hcomm endpoint is not initialized");
+    }
+
+    HcommChannelDesc channel_desc{};
+    auto ret = HcommChannelDescInit(&channel_desc, 1);
+    if (ret != kHcommSuccess) { return HcommStatus(ret, "HcommChannelDescInit"); }
+
+    channel_desc.role = HCOMM_SOCKET_ROLE_CLIENT;
+    channel_desc.remoteEndpoint = remote_endpoint_;
+    channel_desc.notifyNum = kDefaultNotifyNum;
+    channel_desc.exchangeAllMems = true;
+    channel_desc.port = static_cast<std::uint16_t>(port);
+    if (local_endpoint_.protocol == COMM_PROTOCOL_ROCE) {
+        channel_desc.roceAttr.queueNum = 1;
+        channel_desc.roceAttr.tc = tc;
+        channel_desc.roceAttr.sl = sl;
+    } else if (local_endpoint_.protocol == COMM_PROTOCOL_HCCS) {
+        channel_desc.hccsAttr.qos = hccs_qos;
+    }
+    *reinterpret_cast<std::uint32_t*>(
+        channel_desc.raws + sizeof(channel_desc.raws) - sizeof(std::uint32_t)) = channel_index;
+
+    ChannelHandle created = 0;
+    ret = HcommProxy::ChannelCreate(endpoint_handle_, GetCommEngine(), &channel_desc, 1, &created);
+    if (ret != kHcommSuccess) { return HcommStatus(ret, "HcommChannelCreate"); }
+    channels_.insert(created);
+    channel_handle = created;
+    return Status::OK();
+}
+
 Status HcommEndpoint::DestroyChannel(ChannelHandle channel_handle)
 {
+    std::lock_guard<std::mutex> lock(mu_);
     auto it = channels_.find(channel_handle);
     if (it == channels_.end()) { return NotFound("hcomm channel handle not found"); }
     auto channel = channel_handle;
@@ -181,6 +222,7 @@ Status HcommEndpoint::DestroyChannel(ChannelHandle channel_handle)
 
 Status HcommEndpoint::RegisterMemory(const CommMem& mem, CommMemHandle& memory_handle)
 {
+    std::lock_guard<std::mutex> lock(mu_);
     HcommMemHandle hcomm_mem_handle = nullptr;
     auto ret = HcommProxy::MemReg(endpoint_handle_, nullptr, &mem, &hcomm_mem_handle);
     if (ret != kHcommSuccess) { return HcommStatus(ret, "HcommMemReg"); }
@@ -196,11 +238,35 @@ Status HcommEndpoint::RegisterMemory(const CommMem& mem, CommMemHandle& memory_h
 
 Status HcommEndpoint::UnregisterMemory(CommMemHandle memory_handle)
 {
+    std::lock_guard<std::mutex> lock(mu_);
     auto it = memory_handles_.find(memory_handle);
     if (it == memory_handles_.end()) { return NotFound("hcomm memory handle not found"); }
     auto ret = HcommProxy::MemUnreg(endpoint_handle_, memory_handle);
     if (ret == kHcommSuccess) { memory_handles_.erase(it); }
     return HcommStatus(ret, "HcommMemUnreg");
+}
+
+Status HcommEndpoint::ImportMemory(const void* memory_desc, std::uint32_t desc_len,
+                                   CommMem& memory)
+{
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!initialized_) {
+        return Status::Error(StatusCode::NOT_INITIALIZED, "hcomm endpoint is not initialized");
+    }
+    if (memory_desc == nullptr || desc_len == 0) {
+        return Status::Error(StatusCode::INVALID_ARGUMENT, "memory import desc is invalid");
+    }
+    auto ret = HcommProxy::MemImport(endpoint_handle_, memory_desc, desc_len, &memory);
+    return HcommStatus(ret, "HcommMemImport");
+}
+
+Status HcommEndpoint::UnimportMemory(const void* memory_desc, std::uint32_t desc_len)
+{
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!initialized_) { return Status::OK(); }
+    if (memory_desc == nullptr || desc_len == 0) { return Status::OK(); }
+    auto ret = HcommProxy::MemUnimport(endpoint_handle_, memory_desc, desc_len);
+    return HcommStatus(ret, "HcommMemUnimport");
 }
 
 ThreadHandle HcommEndpoint::GetThreadHandle() const

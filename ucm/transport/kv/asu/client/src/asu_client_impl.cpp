@@ -81,6 +81,10 @@ Status AsuClientImpl::Init(const AsuClientConfig& config)
 Status AsuClientImpl::Shutdown()
 {
     auto view = view_;
+    {
+        std::lock_guard<std::mutex> lock(registered_mu_);
+        registered_regions_.clear();
+    }
     if (view) {
         for (auto& pair : view->transports) { pair.second->Shutdown(); }
     }
@@ -161,16 +165,77 @@ Status AsuClientImpl::RegisterRegions(const std::vector<MemoryRegion>& regions,
         return Status::Error(StatusCode::NOT_INITIALIZED, "client has no ASU transports");
     }
 
-    results.assign(regions.size(), RegisterResult{Status::OK(), kInvalidMRHandle});
-    // TODO: register or bind
+    results.assign(regions.size(), RegisterResult{Status::OK()});
+    std::vector<std::vector<TransportRegionHandle>> transport_handles(regions.size());
+    bool any_failed = false;
+
+    for (const auto& pair : view->transports) {
+        std::vector<RegisterHandleResult> transport_results;
+        auto status = pair.second->RegisterRegions(regions, transport_results);
+        if (transport_results.size() != regions.size()) {
+            status = Status::Error(StatusCode::INTERNAL_ERROR,
+                                   "transport returned unexpected register result count");
+            transport_results.assign(regions.size(),
+                                     RegisterHandleResult{status, kInvalidMRHandle});
+        }
+
+        for (std::size_t i = 0; i < regions.size(); ++i) {
+            const auto& transport_result = transport_results[i];
+            if (!transport_result.status.ok() ||
+                transport_result.handle == kInvalidMRHandle) {
+                results[i].status = transport_result.status.ok() ? status : transport_result.status;
+                if (results[i].status.ok()) {
+                    results[i].status = Status::Error(StatusCode::INTERNAL_ERROR,
+                                                      "transport returned invalid memory handle");
+                }
+                any_failed = true;
+                continue;
+            }
+            transport_handles[i].push_back(TransportRegionHandle{pair.first, transport_result.handle});
+        }
+    }
+
+    for (std::size_t i = 0; i < regions.size(); ++i) {
+        if (!results[i].status.ok() ||
+            transport_handles[i].size() != view->transports.size()) {
+            for (const auto& item : transport_handles[i]) {
+                auto trans_iter = view->transports.find(item.asu_id);
+                if (trans_iter != view->transports.end()) {
+                    (void)trans_iter->second->UnregisterRegions({item.handle});
+                }
+            }
+            any_failed = true;
+            continue;
+        }
+
+        std::lock_guard<std::mutex> lock(registered_mu_);
+        for (const auto& item : transport_handles[i]) {
+            registered_regions_[item.asu_id].push_back(item.handle);
+        }
+    }
+
+    if (any_failed) {
+        return Status::Error(StatusCode::PARTIAL_FAILED, "some memory regions failed to register");
+    }
     return Status::OK();
 }
 
-Status AsuClientImpl::UnregisterRegions(const std::vector<MRHandle>& handles)
+Status AsuClientImpl::UnregisterRegions()
 {
     auto view = view_;
     if (!view || view->transports.empty()) { return Status::OK(); }
-    // TODO: unregister
+    std::unordered_map<AsuId, std::vector<MRHandle>> by_transport;
+    {
+        std::lock_guard<std::mutex> lock(registered_mu_);
+        by_transport.swap(registered_regions_);
+    }
+
+    for (const auto& item : by_transport) {
+        auto trans_iter = view->transports.find(item.first);
+        if (trans_iter == view->transports.end()) { continue; }
+        auto status = trans_iter->second->UnregisterRegions(item.second);
+        if (!status.ok()) { return status; }
+    }
     return Status::OK();
 }
 

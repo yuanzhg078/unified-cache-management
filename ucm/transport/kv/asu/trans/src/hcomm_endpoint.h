@@ -24,6 +24,7 @@
 #pragma once
 
 #include <cstdint>
+#include <mutex>
 #include <unordered_set>
 #include <vector>
 #include "asu_transport/connection_manager.h"
@@ -45,10 +46,15 @@ public:
     Status CreateChannels(std::uint32_t port, std::uint32_t channel_num,
                           std::uint8_t tc, std::uint8_t sl, std::uint32_t hccs_qos,
                           std::vector<ChannelHandle>& channel_handles);
+    Status CreateChannel(std::uint32_t port, std::uint8_t tc, std::uint8_t sl,
+                         std::uint32_t hccs_qos, std::uint32_t channel_index,
+                         ChannelHandle& channel_handle);
     Status DestroyChannel(ChannelHandle channel_handle);
 
     Status RegisterMemory(const CommMem& mem, CommMemHandle& memory_handle);
     Status UnregisterMemory(CommMemHandle memory_handle);
+    Status ImportMemory(const void* memory_desc, std::uint32_t desc_len, CommMem& memory);
+    Status UnimportMemory(const void* memory_desc, std::uint32_t desc_len);
 
     ThreadHandle GetThreadHandle() const;
     EndpointHandle GetEndpointHandle() const;
@@ -67,6 +73,7 @@ private:
     bool owns_thread_{false};
     std::unordered_set<ChannelHandle> channels_;
     std::unordered_set<CommMemHandle> memory_handles_;
+    std::mutex mu_;
 };
 
 }  // namespace UC::ASU

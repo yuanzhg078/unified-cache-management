@@ -24,6 +24,8 @@
 #include "asu_transport/connection_manager.h"
 
 #include <mutex>
+#include <shared_mutex>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include "connection_backend.h"
@@ -62,6 +64,7 @@ public:
 
     Status Initialize()
     {
+        std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mu_);
         std::lock_guard<std::mutex> lock(mu_);
         if (initialized_) { return Status::OK(); }
         if (!backend_) {
@@ -74,52 +77,97 @@ public:
 
     void Finalize()
     {
+        std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mu_);
         std::lock_guard<std::mutex> lock(mu_);
         if (!initialized_) { return; }
         backend_->Finalize();
         memory_handles_.clear();
+        connection_endpoint_handles_.clear();
         connection_handles_.clear();
+        endpoint_handles_.clear();
         initialized_ = false;
     }
 
     Status CreateConnection(const CreateConnectionRequest& request,
                             std::vector<ConnectionHandle>& connection_handles)
     {
-        std::lock_guard<std::mutex> lock(mu_);
-        if (!initialized_) { return NotInitialized(); }
-        if (request.qp_num == 0) { return Invalid("qp_num must be greater than 0"); }
-        if (request.timeout_ms == 0) { return Invalid("timeout_ms must be greater than 0"); }
+        ConnectionEndpointHandle endpoint_handle = kInvalidConnectionEndpointHandle;
+        return CreateConnection(request, endpoint_handle, connection_handles);
+    }
+
+    Status CreateConnection(const CreateConnectionRequest& request,
+                            ConnectionEndpointHandle& endpoint_handle,
+                            std::vector<ConnectionHandle>& connection_handles)
+    {
+        std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mu_);
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (!initialized_) { return NotInitialized(); }
+            if (request.qp_num == 0) { return Invalid("qp_num must be greater than 0"); }
+            if (request.timeout_ms == 0) { return Invalid("timeout_ms must be greater than 0"); }
+        }
 
         connection_handles.clear();
-        auto status = backend_->CreateConnection(request, connection_handles);
+        endpoint_handle = kInvalidConnectionEndpointHandle;
+        auto status = backend_->CreateConnection(request, endpoint_handle, connection_handles);
         if (!status.ok()) { return status; }
-        if (connection_handles.size() != request.qp_num) {
+        status = ValidateCreatedConnectionResult(request, endpoint_handle, connection_handles);
+        if (!status.ok()) {
+            endpoint_handle = kInvalidConnectionEndpointHandle;
             connection_handles.clear();
-            return Status::Error(StatusCode::INTERNAL_ERROR,
-                                 "backend returned unexpected connection handle count");
+            return status;
+        }
+
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!initialized_) {
+            endpoint_handle = kInvalidConnectionEndpointHandle;
+            connection_handles.clear();
+            return NotInitialized();
         }
         for (auto handle : connection_handles) {
-            if (handle == kInvalidConnectionHandle) {
+            if (connection_handles_.find(handle) != connection_handles_.end()) {
+                endpoint_handle = kInvalidConnectionEndpointHandle;
                 connection_handles.clear();
                 return Status::Error(StatusCode::INTERNAL_ERROR,
-                                     "backend returned invalid connection handle");
+                                     "backend returned duplicate connection handle");
             }
+        }
+        endpoint_handles_.insert(endpoint_handle);
+        for (auto handle : connection_handles) {
             connection_handles_.insert(handle);
+            connection_endpoint_handles_[handle] = endpoint_handle;
         }
         return Status::OK();
     }
 
     std::vector<Status> DeleteConnections(const std::vector<ConnectionHandle>& connection_handles)
     {
-        std::lock_guard<std::mutex> lock(mu_);
-        if (!initialized_) { return SameStatus(connection_handles.size(), NotInitialized()); }
-        auto invalid = ValidateConnectionHandles(connection_handles);
-        if (!invalid.ok()) { return SameStatus(connection_handles.size(), invalid); }
+        std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mu_);
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (!initialized_) { return SameStatus(connection_handles.size(), NotInitialized()); }
+            auto invalid = ValidateConnectionHandles(connection_handles);
+            if (!invalid.ok()) { return SameStatus(connection_handles.size(), invalid); }
+        }
 
         auto statuses = backend_->DeleteConnections(connection_handles);
         NormalizeBatchStatusSize(statuses, connection_handles.size());
-        for (std::size_t i = 0; i < connection_handles.size(); ++i) {
-            if (statuses[i].ok()) { connection_handles_.erase(connection_handles[i]); }
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            for (std::size_t i = 0; i < connection_handles.size(); ++i) {
+                if (!statuses[i].ok()) { continue; }
+                auto endpoint = connection_endpoint_handles_.find(connection_handles[i]);
+                ConnectionEndpointHandle endpoint_handle = kInvalidConnectionEndpointHandle;
+                if (endpoint != connection_endpoint_handles_.end()) {
+                    endpoint_handle = endpoint->second;
+                    connection_endpoint_handles_.erase(endpoint);
+                }
+                connection_handles_.erase(connection_handles[i]);
+                if (endpoint_handle != kInvalidConnectionEndpointHandle &&
+                    !HasConnectionOnEndpoint(endpoint_handle)) {
+                    endpoint_handles_.erase(endpoint_handle);
+                }
+            }
         }
         return statuses;
     }
@@ -127,22 +175,25 @@ public:
     std::vector<Status> Send(const std::vector<SendIoBatch>& io_batches,
                              std::uint32_t kernel_count, std::uint32_t quiet_count)
     {
-        std::lock_guard<std::mutex> lock(mu_);
-        if (!initialized_) { return SameStatus(io_batches.size(), NotInitialized()); }
-        if (kernel_count == 0) {
-            return SameStatus(io_batches.size(), Invalid("kernel_count must be greater than 0"));
-        }
-        if (quiet_count == 0) {
-            return SameStatus(io_batches.size(), Invalid("quiet_count must be greater than 0"));
-        }
-        for (const auto& batch : io_batches) {
-            auto status = ValidateConnectionHandle(batch.connection_handle);
-            if (!status.ok()) { return SameStatus(io_batches.size(), status); }
-            if (batch.send_buffer == nullptr) {
-                return SameStatus(io_batches.size(), Invalid("send_buffer is null"));
+        std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mu_);
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (!initialized_) { return SameStatus(io_batches.size(), NotInitialized()); }
+            if (kernel_count == 0) {
+                return SameStatus(io_batches.size(), Invalid("kernel_count must be greater than 0"));
             }
-            if (batch.flag_buffer == nullptr) {
-                return SameStatus(io_batches.size(), Invalid("flag_buffer is null"));
+            if (quiet_count == 0) {
+                return SameStatus(io_batches.size(), Invalid("quiet_count must be greater than 0"));
+            }
+            for (const auto& batch : io_batches) {
+                auto status = ValidateConnectionHandle(batch.connection_handle);
+                if (!status.ok()) { return SameStatus(io_batches.size(), status); }
+                if (batch.send_buffer == nullptr) {
+                    return SameStatus(io_batches.size(), Invalid("send_buffer is null"));
+                }
+                if (batch.flag_buffer == nullptr) {
+                    return SameStatus(io_batches.size(), Invalid("flag_buffer is null"));
+                }
             }
         }
 
@@ -151,22 +202,25 @@ public:
         return statuses;
     }
 
-    Status RegisterMemory(ConnectionHandle connection_handle,
+    Status RegisterMemory(ConnectionEndpointHandle endpoint_handle,
                           const std::vector<RegisterMemoryDesc>& memory_descs,
                           std::vector<CommMemHandle>& memory_handles)
     {
-        std::lock_guard<std::mutex> lock(mu_);
-        if (!initialized_) { return NotInitialized(); }
-        auto status = ValidateConnectionHandle(connection_handle);
-        if (!status.ok()) { return status; }
-        if (memory_descs.empty()) { return Invalid("memory_descs is empty"); }
-        for (const auto& desc : memory_descs) {
-            if (desc.addr == 0) { return Invalid("memory addr is null"); }
-            if (desc.size == 0) { return Invalid("memory size must be greater than 0"); }
+        std::shared_lock<std::shared_mutex> lifecycle_lock(lifecycle_mu_);
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (!initialized_) { return NotInitialized(); }
+            auto status = ValidateEndpointHandle(endpoint_handle);
+            if (!status.ok()) { return status; }
+            if (memory_descs.empty()) { return Invalid("memory_descs is empty"); }
+            for (const auto& desc : memory_descs) {
+                if (desc.addr == 0) { return Invalid("memory addr is null"); }
+                if (desc.size == 0) { return Invalid("memory size must be greater than 0"); }
+            }
         }
 
         memory_handles.clear();
-        status = backend_->RegisterMemory(connection_handle, memory_descs, memory_handles);
+        auto status = backend_->RegisterMemory(endpoint_handle, memory_descs, memory_handles);
         if (!status.ok()) { return status; }
         if (memory_handles.size() != memory_descs.size()) {
             memory_handles.clear();
@@ -179,43 +233,103 @@ public:
                 return Status::Error(StatusCode::INTERNAL_ERROR,
                                      "backend returned invalid memory handle");
             }
-            memory_handles_.insert(handle);
         }
+
+        std::lock_guard<std::mutex> lock(mu_);
+        if (!initialized_) {
+            memory_handles.clear();
+            return NotInitialized();
+        }
+        for (auto handle : memory_handles) {
+            if (memory_handles_.find(handle) != memory_handles_.end()) {
+                memory_handles.clear();
+                return Status::Error(StatusCode::INTERNAL_ERROR,
+                                     "backend returned duplicate memory handle");
+            }
+        }
+        for (auto handle : memory_handles) { memory_handles_.emplace(handle, endpoint_handle); }
         return Status::OK();
     }
 
     std::vector<Status> UnregisterMemory(const std::vector<UnregisterMemoryDesc>& memory_descs)
     {
-        std::lock_guard<std::mutex> lock(mu_);
-        if (!initialized_) { return SameStatus(memory_descs.size(), NotInitialized()); }
-        for (const auto& desc : memory_descs) {
-            auto status = ValidateConnectionHandle(desc.connection_handle);
-            if (!status.ok()) { return SameStatus(memory_descs.size(), status); }
-            if (desc.memory_handle == kInvalidCommMemHandle) {
-                return SameStatus(memory_descs.size(), Invalid("memory_handle is invalid"));
-            }
-            if (memory_handles_.find(desc.memory_handle) == memory_handles_.end()) {
-                return SameStatus(memory_descs.size(),
-                                  Status::Error(StatusCode::NOT_FOUND,
-                                                "memory_handle is not registered by this manager"));
+        std::unique_lock<std::shared_mutex> lifecycle_lock(lifecycle_mu_);
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            if (!initialized_) { return SameStatus(memory_descs.size(), NotInitialized()); }
+            for (const auto& desc : memory_descs) {
+                auto status = ValidateEndpointHandle(desc.endpoint_handle);
+                if (!status.ok()) { return SameStatus(memory_descs.size(), status); }
+                if (desc.memory_handle == kInvalidCommMemHandle) {
+                    return SameStatus(memory_descs.size(), Invalid("memory_handle is invalid"));
+                }
+                auto memory = memory_handles_.find(desc.memory_handle);
+                if (memory == memory_handles_.end()) {
+                    return SameStatus(
+                        memory_descs.size(),
+                        Status::Error(StatusCode::NOT_FOUND,
+                                      "memory_handle is not registered by this manager"));
+                }
+                if (memory->second != desc.endpoint_handle) {
+                    return SameStatus(
+                        memory_descs.size(),
+                        Status::Error(StatusCode::INVALID_ARGUMENT,
+                                      "memory_handle does not belong to endpoint_handle"));
+                }
             }
         }
 
         auto statuses = backend_->UnregisterMemory(memory_descs);
         NormalizeBatchStatusSize(statuses, memory_descs.size());
-        for (std::size_t i = 0; i < memory_descs.size(); ++i) {
-            if (statuses[i].ok()) { memory_handles_.erase(memory_descs[i].memory_handle); }
+        {
+            std::lock_guard<std::mutex> lock(mu_);
+            for (std::size_t i = 0; i < memory_descs.size(); ++i) {
+                if (statuses[i].ok()) { memory_handles_.erase(memory_descs[i].memory_handle); }
+            }
         }
         return statuses;
     }
 
 private:
+    static Status ValidateCreatedConnectionResult(
+        const CreateConnectionRequest& request, ConnectionEndpointHandle endpoint_handle,
+        const std::vector<ConnectionHandle>& connection_handles)
+    {
+        if (endpoint_handle == kInvalidConnectionEndpointHandle) {
+            return Status::Error(StatusCode::INTERNAL_ERROR,
+                                 "backend returned invalid endpoint handle");
+        }
+        if (connection_handles.size() != request.qp_num) {
+            return Status::Error(StatusCode::INTERNAL_ERROR,
+                                 "backend returned unexpected connection handle count");
+        }
+        for (auto handle : connection_handles) {
+            if (handle == kInvalidConnectionHandle) {
+                return Status::Error(StatusCode::INTERNAL_ERROR,
+                                     "backend returned invalid connection handle");
+            }
+        }
+        return Status::OK();
+    }
+
     Status ValidateConnectionHandle(ConnectionHandle handle) const
     {
         if (handle == kInvalidConnectionHandle) { return Invalid("connection_handle is invalid"); }
         if (connection_handles_.find(handle) == connection_handles_.end()) {
             return Status::Error(StatusCode::NOT_FOUND,
                                  "connection_handle is not created by this manager");
+        }
+        return Status::OK();
+    }
+
+    Status ValidateEndpointHandle(ConnectionEndpointHandle handle) const
+    {
+        if (handle == kInvalidConnectionEndpointHandle) {
+            return Invalid("endpoint_handle is invalid");
+        }
+        if (endpoint_handles_.find(handle) == endpoint_handles_.end()) {
+            return Status::Error(StatusCode::NOT_FOUND,
+                                 "endpoint_handle is not created by this manager");
         }
         return Status::OK();
     }
@@ -236,11 +350,22 @@ private:
                                                 "backend returned unexpected status count"));
     }
 
+    bool HasConnectionOnEndpoint(ConnectionEndpointHandle endpoint_handle) const
+    {
+        for (const auto& item : connection_endpoint_handles_) {
+            if (item.second == endpoint_handle) { return true; }
+        }
+        return false;
+    }
+
     ConnectionManagerConfig config_;
     std::unique_ptr<ConnectionBackend> backend_;
     bool initialized_{false};
+    std::unordered_set<ConnectionEndpointHandle> endpoint_handles_;
     std::unordered_set<ConnectionHandle> connection_handles_;
-    std::unordered_set<CommMemHandle> memory_handles_;
+    std::unordered_map<ConnectionHandle, ConnectionEndpointHandle> connection_endpoint_handles_;
+    std::unordered_map<CommMemHandle, ConnectionEndpointHandle> memory_handles_;
+    std::shared_mutex lifecycle_mu_;
     std::mutex mu_;
 };
 
@@ -273,6 +398,13 @@ Status ConnectionManager::CreateConnection(const CreateConnectionRequest& reques
     return impl_->CreateConnection(request, connection_handles);
 }
 
+Status ConnectionManager::CreateConnection(const CreateConnectionRequest& request,
+                                           ConnectionEndpointHandle& endpoint_handle,
+                                           std::vector<ConnectionHandle>& connection_handles)
+{
+    return impl_->CreateConnection(request, endpoint_handle, connection_handles);
+}
+
 std::vector<Status> ConnectionManager::DeleteConnections(
     const std::vector<ConnectionHandle>& connection_handles)
 {
@@ -286,11 +418,11 @@ std::vector<Status> ConnectionManager::Send(const std::vector<SendIoBatch>& io_b
     return impl_->Send(io_batches, kernel_count, quiet_count);
 }
 
-Status ConnectionManager::RegisterMemory(ConnectionHandle connection_handle,
+Status ConnectionManager::RegisterMemory(ConnectionEndpointHandle endpoint_handle,
                                          const std::vector<RegisterMemoryDesc>& memory_descs,
                                          std::vector<CommMemHandle>& memory_handles)
 {
-    return impl_->RegisterMemory(connection_handle, memory_descs, memory_handles);
+    return impl_->RegisterMemory(endpoint_handle, memory_descs, memory_handles);
 }
 
 std::vector<Status> ConnectionManager::UnregisterMemory(

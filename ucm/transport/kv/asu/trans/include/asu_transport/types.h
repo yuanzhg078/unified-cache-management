@@ -105,7 +105,6 @@ struct MemoryRegion {  // 地址范围抽象
 
 struct Buffer {  // 单个IO
     MemoryRegion region;
-    MRHandle handle{kInvalidMRHandle};
 };
 
 struct KVBuffer {
@@ -114,6 +113,10 @@ struct KVBuffer {
 };
 
 struct RegisterResult {
+    Status status;
+};
+
+struct RegisterHandleResult {
     Status status;
     MRHandle handle{kInvalidMRHandle};
 };

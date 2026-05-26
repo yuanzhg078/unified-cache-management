@@ -92,10 +92,10 @@ public:
     virtual Status Wait(TaskId task_id, std::uint64_t timeout_ms, TaskResult& result) = 0;
 
     virtual Status RegisterRegions(const std::vector<MemoryRegion>& regions,
-                                   std::vector<RegisterResult>& results) = 0;
+                                   std::vector<RegisterHandleResult>& results) = 0;
 
     virtual Status BindRegisteredRegions(const std::vector<RegisteredMemory>& regions,
-                                         std::vector<RegisterResult>& results) = 0;
+                                         std::vector<RegisterHandleResult>& results) = 0;
 
     virtual Status UnregisterRegions(const std::vector<MRHandle>& handles) = 0;
 };

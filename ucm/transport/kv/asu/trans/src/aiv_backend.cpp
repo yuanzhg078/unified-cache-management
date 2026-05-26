@@ -50,9 +50,11 @@ Status AivBackend::Initialize(const ConnectionManagerConfig& config)
 void AivBackend::Finalize() {}
 
 Status AivBackend::CreateConnection(const CreateConnectionRequest& request,
+                                    ConnectionEndpointHandle& endpoint_handle,
                                     std::vector<ConnectionHandle>& connection_handles)
 {
     (void)request;
+    endpoint_handle = kInvalidConnectionEndpointHandle;
     connection_handles.clear();
     return Unsupported();
 }
@@ -72,11 +74,11 @@ std::vector<Status> AivBackend::Send(const std::vector<SendIoBatch>& io_batches,
     return UnsupportedBatch(io_batches.size());
 }
 
-Status AivBackend::RegisterMemory(ConnectionHandle connection_handle,
+Status AivBackend::RegisterMemory(ConnectionEndpointHandle endpoint_handle,
                                   const std::vector<RegisterMemoryDesc>& memory_descs,
                                   std::vector<CommMemHandle>& memory_handles)
 {
-    (void)connection_handle;
+    (void)endpoint_handle;
     memory_handles.assign(memory_descs.size(), kInvalidCommMemHandle);
     return Unsupported();
 }

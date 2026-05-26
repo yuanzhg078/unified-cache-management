@@ -34,9 +34,11 @@
 namespace UC::ASU {
 
 using ConnectionHandle = std::uint64_t;
+using ConnectionEndpointHandle = std::uint64_t;
 using CommMemHandle = void*;
 
 constexpr ConnectionHandle kInvalidConnectionHandle = 0;
+constexpr ConnectionEndpointHandle kInvalidConnectionEndpointHandle = 0;
 constexpr CommMemHandle kInvalidCommMemHandle = nullptr;
 
 enum class ConnectionBackendType {
@@ -76,7 +78,7 @@ struct RegisterMemoryDesc {
 };
 
 struct UnregisterMemoryDesc {
-    ConnectionHandle connection_handle{kInvalidConnectionHandle};
+    ConnectionEndpointHandle endpoint_handle{kInvalidConnectionEndpointHandle};
     CommMemHandle memory_handle{kInvalidCommMemHandle};
 };
 
@@ -96,13 +98,16 @@ public:
 
     Status CreateConnection(const CreateConnectionRequest& request,
                             std::vector<ConnectionHandle>& connection_handles);
+    Status CreateConnection(const CreateConnectionRequest& request,
+                            ConnectionEndpointHandle& endpoint_handle,
+                            std::vector<ConnectionHandle>& connection_handles);
 
     std::vector<Status> DeleteConnections(const std::vector<ConnectionHandle>& connection_handles);
 
     std::vector<Status> Send(const std::vector<SendIoBatch>& io_batches,
                              std::uint32_t kernel_count, std::uint32_t quiet_count);
 
-    Status RegisterMemory(ConnectionHandle connection_handle,
+    Status RegisterMemory(ConnectionEndpointHandle endpoint_handle,
                           const std::vector<RegisterMemoryDesc>& memory_descs,
                           std::vector<CommMemHandle>& memory_handles);
 

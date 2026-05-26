@@ -69,8 +69,6 @@ struct TransportTaskContext {
     std::atomic<TransportTaskState> state{TransportTaskState::PENDING};
     Status final_status{StatusCode::OK};
 
-    std::vector<MRHandle> mr_handles;
-
     std::mutex wait_mu;
     std::condition_variable cv;
 

@@ -102,22 +102,23 @@ sequenceDiagram
 `HcommBackend::BuildEndpoint()` 会按 `local_` / `remote_` 前缀从 attrs 中读取 endpoint 信息；如果未配置，则 RoCE/UBOE 地址仍可使用 `CreateConnection()` 入参中的 `local_ip` / `remote_ip` 作为默认值。
 
 ```mermaid
+
 flowchart LR
-    Build[BuildEndpoint(prefix)] --> Protocol[FillEndpointProtocol]
-    Build --> Address[FillEndpointAddress]
-    Build --> Location[FillEndpointLocation]
+    Build[BuildEndpoint] --> Protocol[FillProtocol]
+    Build --> Address[FillAddress]
+    Build --> Location[FillLocation]
 
-    Protocol --> RoCE[roce]
-    Protocol --> UBOE[uboe]
-    Protocol --> HCCS[hccs]
-    Protocol --> UB[ub_ctp / ub_tp]
+    Protocol --> RoCE[RoCE]
+    Protocol --> UBOE[UBOE]
+    Protocol --> HCCS[HCCS]
+    Protocol --> UB[UB]
 
-    Address --> IP[RoCE/UBOE: IPv4 或 IPv6]
-    Address --> ID[HCCS: COMM_ADDR_TYPE_ID]
-    Address --> EID[UB: COMM_ADDR_TYPE_EID]
+    Address --> IP[IPv4/IPv6]
+    Address --> ID[Type ID]
+    Address --> EID[Type EID]
 
-    Location --> Host[host: loc.host.id]
-    Location --> Device[device: devPhyId/superDevId/superPodIdx/serverIdx]
+    Location --> Host[Host ID]
+    Location --> Device[Device ID]
 ```
 
 常用配置示例：

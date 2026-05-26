@@ -25,7 +25,9 @@
 
 #include <memory>
 #include <mutex>
+#include <string>
 #include <unordered_map>
+#include <vector>
 #include "connection_backend.h"
 #include "hcomm_endpoint.h"
 #include "hcomm/hcomm_res_defs.h"
@@ -41,6 +43,7 @@ public:
     void Finalize() override;
 
     Status CreateConnection(const CreateConnectionRequest& request,
+                            ConnectionEndpointHandle& endpoint_handle,
                             std::vector<ConnectionHandle>& connection_handles) override;
 
     std::vector<Status> DeleteConnections(
@@ -50,7 +53,7 @@ public:
                              std::uint32_t kernel_count,
                              std::uint32_t quiet_count) override;
 
-    Status RegisterMemory(ConnectionHandle connection_handle,
+    Status RegisterMemory(ConnectionEndpointHandle endpoint_handle,
                           const std::vector<RegisterMemoryDesc>& memory_descs,
                           std::vector<CommMemHandle>& memory_handles) override;
 
@@ -60,12 +63,19 @@ public:
 private:
     struct HcommConnection {
         std::shared_ptr<HcommEndpoint> endpoint;
+        std::shared_ptr<std::mutex> io_mu{std::make_shared<std::mutex>()};
         ChannelHandle channel_handle{0};
         std::uint64_t send_size{0};
         std::uint64_t flag_size{1};
         void* remote_send_addr{nullptr};
         void* remote_flag_addr{nullptr};
         bool owns_channel{false};
+        int control_fd{-1};
+    };
+    struct ImportedRemoteMemory {
+        std::string tag;
+        CommMem memory{};
+        std::vector<std::uint8_t> export_desc;
     };
 
     Status BuildEndpoint(const std::string& ip, const std::string& attr_prefix,
@@ -77,15 +87,28 @@ private:
     Status LoadEndpointConfigFile();
     Status CreateConnectionsOnEndpoint(const std::string& local_ip, const std::string& remote_ip,
                                        std::uint32_t port, std::uint32_t qp_num,
+                                       ConnectionEndpointHandle& endpoint_handle,
                                        std::vector<ConnectionHandle>& connection_handles);
+    Status CreateClientServerConnection(const std::string& local_ip, const std::string& remote_ip,
+                                        std::uint32_t port, std::uint32_t qp_num,
+                                        std::uint32_t timeout_ms,
+                                        ConnectionEndpointHandle& endpoint_handle,
+                                        std::vector<ConnectionHandle>& connection_handles);
+    Status ImportRemoteMemories(int socket_fd, const std::shared_ptr<HcommEndpoint>& endpoint,
+                                std::uint64_t remote_endpoint_handle,
+                                std::uint32_t timeout_ms,
+                                std::vector<ImportedRemoteMemory>& imported);
     Status DestroyOneConnection(ConnectionHandle handle);
-    Status SendOne(const SendIoBatch& io_batch, std::uint32_t index);
-    Status RegisterOne(HcommConnection& connection, const RegisterMemoryDesc& desc,
+    Status SendOne(const HcommConnection& conn, const SendIoBatch& io_batch,
+                   std::uint32_t index);
+    Status RegisterOne(HcommEndpoint& endpoint, const RegisterMemoryDesc& desc,
                        CommMemHandle& memory_handle);
-    Status UnregisterOne(const UnregisterMemoryDesc& desc);
+    Status UnregisterOne(const std::shared_ptr<HcommEndpoint>& endpoint,
+                         CommMemHandle memory_handle);
 
     std::uint64_t GetAttrU64(const std::string& key, std::uint64_t default_value) const;
     std::string GetAttrString(const std::string& key, const std::string& default_value) const;
+    bool UseTcpControlPlane() const;
 
     ConnectionManagerConfig config_;
     const std::unordered_map<std::string, std::string>* active_attrs_{nullptr};
@@ -96,6 +119,11 @@ private:
     std::uint64_t default_flag_size_{1};
     void* default_remote_send_addr_{nullptr};
     void* default_remote_flag_addr_{nullptr};
+    ConnectionEndpointHandle next_endpoint_handle_{1};
+    std::unordered_map<ConnectionEndpointHandle, std::shared_ptr<HcommEndpoint>> endpoints_;
+    std::unordered_map<ConnectionEndpointHandle, std::vector<int>> endpoint_sockets_;
+    std::unordered_map<ConnectionEndpointHandle, std::uint64_t> remote_endpoint_handles_;
+    std::unordered_map<ConnectionEndpointHandle, std::vector<ImportedRemoteMemory>> imported_remote_mems_;
     std::unordered_map<ConnectionHandle, HcommConnection> connections_;
     std::mutex mu_;
 };

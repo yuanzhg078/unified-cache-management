@@ -33,6 +33,7 @@ public:
     void Finalize() override;
 
     Status CreateConnection(const CreateConnectionRequest& request,
+                            ConnectionEndpointHandle& endpoint_handle,
                             std::vector<ConnectionHandle>& connection_handles) override;
 
     std::vector<Status> DeleteConnections(
@@ -42,7 +43,7 @@ public:
                              std::uint32_t kernel_count,
                              std::uint32_t quiet_count) override;
 
-    Status RegisterMemory(ConnectionHandle connection_handle,
+    Status RegisterMemory(ConnectionEndpointHandle endpoint_handle,
                           const std::vector<RegisterMemoryDesc>& memory_descs,
                           std::vector<CommMemHandle>& memory_handles) override;
 

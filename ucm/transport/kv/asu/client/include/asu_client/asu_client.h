@@ -62,7 +62,7 @@ public:
 
     virtual Status RegisterRegions(const std::vector<MemoryRegion>& regions,
                                    std::vector<RegisterResult>& results) = 0;
-    virtual Status UnregisterRegions(const std::vector<MRHandle>& handles) = 0;
+    virtual Status UnregisterRegions() = 0;
 };
 
 using TransportFactory = std::function<std::unique_ptr<AsuTransport>()>;

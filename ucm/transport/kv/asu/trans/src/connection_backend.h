@@ -36,6 +36,7 @@ public:
     virtual void Finalize() = 0;
 
     virtual Status CreateConnection(const CreateConnectionRequest& request,
+                                    ConnectionEndpointHandle& endpoint_handle,
                                     std::vector<ConnectionHandle>& connection_handles) = 0;
 
     virtual std::vector<Status> DeleteConnections(
@@ -45,7 +46,7 @@ public:
                                      std::uint32_t kernel_count,
                                      std::uint32_t quiet_count) = 0;
 
-    virtual Status RegisterMemory(ConnectionHandle connection_handle,
+    virtual Status RegisterMemory(ConnectionEndpointHandle endpoint_handle,
                                   const std::vector<RegisterMemoryDesc>& memory_descs,
                                   std::vector<CommMemHandle>& memory_handles) = 0;
 

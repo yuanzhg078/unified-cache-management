@@ -59,17 +59,22 @@ public:
     Status Wait(TaskId task_id, std::uint64_t timeout_ms, TaskResult& result) override;
 
     Status RegisterRegions(const std::vector<MemoryRegion>& regions,
-                           std::vector<RegisterResult>& results) override;
+                           std::vector<RegisterHandleResult>& results) override;
 
     Status BindRegisteredRegions(const std::vector<RegisteredMemory>& regions,
-                                 std::vector<RegisterResult>& results) override;
+                                 std::vector<RegisterHandleResult>& results) override;
 
     Status UnregisterRegions(const std::vector<MRHandle>& handles) override;
 
 private:
     struct EndpointConnection {
         AsuEndpoint endpoint;
+        ConnectionEndpointHandle endpoint_handle{kInvalidConnectionEndpointHandle};
         std::vector<ConnectionHandle> handles;
+    };
+    struct RegisteredRegionState {
+        MemoryRegion region;
+        std::vector<UnregisterMemoryDesc> unregister_descs;
     };
 
     using TransportTaskContextPtr = std::shared_ptr<TransportTaskContext>;
@@ -93,7 +98,9 @@ private:
     std::thread worker_;
     std::atomic_bool stop_{false};
 
-    std::unordered_map<MRHandle, MemoryRegion> registered_regions_;
+    std::mutex registered_mu_;
+    MRHandle next_mr_handle_{1};
+    std::unordered_map<MRHandle, RegisteredRegionState> registered_regions_;
 };
 
 }  // namespace UC::ASU

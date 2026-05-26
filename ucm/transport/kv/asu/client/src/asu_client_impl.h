@@ -24,7 +24,9 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <unordered_map>
+#include <vector>
 #include "asu_client/asu_client.h"
 #include "client_task_manager.h"
 
@@ -50,7 +52,7 @@ public:
 
     Status RegisterRegions(const std::vector<MemoryRegion>& regions,
                            std::vector<RegisterResult>& results) override;
-    Status UnregisterRegions(const std::vector<MRHandle>& handles) override;
+    Status UnregisterRegions() override;
 
 private:
     struct Router {
@@ -61,6 +63,10 @@ private:
     struct ViewSnapshot {
         std::shared_ptr<Router> router;
         std::unordered_map<AsuId, std::shared_ptr<AsuTransport>> transports;
+    };
+    struct TransportRegionHandle {
+        AsuId asu_id{0};
+        MRHandle handle{kInvalidMRHandle};
     };
 
     Status SubmitAsync(ClientOpType op_type, const std::vector<KVBuffer>& entries, TaskId& task_id);
@@ -74,6 +80,9 @@ private:
     AsuClientConfig config_;
     std::shared_ptr<ViewSnapshot> view_;
     ClientTaskManager task_manager_;
+
+    std::mutex registered_mu_;
+    std::unordered_map<AsuId, std::vector<MRHandle>> registered_regions_;
 };
 
 }  // namespace UC::ASU
