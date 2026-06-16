@@ -24,7 +24,9 @@
 #include "asu_transport_impl.h"
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <utility>
 #include "aicpu_trans_provider.h"
@@ -33,6 +35,7 @@
 #include "connection_internal.h"
 #include "connection_manager.h"
 #include "logger.h"
+#include "sub_batch_trace.h"
 #include "transport_config_parser.h"
 
 namespace UC::ASU {
@@ -56,6 +59,27 @@ Status AsuTransportImpl::Init(const TransportConfig& config)
     }
     config_ = config;
     ioScheduler_ = IoScheduler(config_);
+
+    const auto* traceEnv = std::getenv("ASU_TRACE");
+    traceEnabled_ = (traceEnv != nullptr && std::string(traceEnv) == "1");
+    traceOutput_ = nullptr;
+    if (traceEnabled_) {
+        const auto* traceFileEnv = std::getenv("ASU_TRACE_FILE");
+        if (traceFileEnv != nullptr && traceFileEnv[0] != '\0') {
+            traceFile_.open(traceFileEnv, std::ios::out | std::ios::trunc);
+            if (!traceFile_.is_open()) {
+                return Status::Error(StatusCode::IO_ERROR,
+                                     "failed to open ASU_TRACE_FILE: " + std::string(traceFileEnv));
+            }
+            traceOutput_ = &traceFile_;
+            UC_INFO(
+                "AsuTransportImpl::Init sub-batch trace enabled (ASU_TRACE=1, "
+                "ASU_TRACE_FILE={})",
+                traceFileEnv);
+        } else {
+            UC_INFO("AsuTransportImpl::Init sub-batch trace enabled (ASU_TRACE=1, UC log)");
+        }
+    }
 
     if (!transProvider_) {
         switch (config_.providerType) {
@@ -109,6 +133,7 @@ Status AsuTransportImpl::Init(const TransportConfig& config)
     auto queueDepth = std::max<std::size_t>(2, static_cast<std::size_t>(config_.maxInflightTasks));
     executeQueue_.Setup(queueDepth + 1);
     stop_.store(false, std::memory_order_release);
+
     worker_ = std::thread(&AsuTransportImpl::WorkerLoop, this);
     completionWorker_ = std::thread(&AsuTransportImpl::CompletionLoop, this);
     UC_DEBUG("AsuTransportImpl::Init OK: queueDepth={}", queueDepth);
@@ -140,6 +165,7 @@ Status AsuTransportImpl::Shutdown()
         connManager_->Shutdown();
         connManager_.reset();
     }
+    if (traceFile_.is_open()) { traceFile_.close(); }
 
     UC_DEBUG("AsuTransportImpl::Shutdown OK");
     return Status::OK();
@@ -387,81 +413,104 @@ void AsuTransportImpl::ProcessTask(const TransportTaskContextPtr& ctx)
         SendSubBatchBuffers(subBatchContexts, ioBatches, subBatchIndexes);
     }
 
-    std::lock_guard<std::mutex> lock(ctx->waitMu);
-    if (ctx->state.load(std::memory_order_acquire) == TransportTaskState::CANCELED) {
-        UC_DEBUG("AsuTransportImpl::ProcessTask canceled during process task_id={} sub_batches={}",
-                 ctx->taskId, subBatchContexts.size());
-        ReleaseAllSubBatchResources(subBatchContexts);
-        ctx->cv.notify_all();
-        return;
+    std::optional<trace::SubBatchTraceSnapshot> traceSnapshot;
+    {
+        std::lock_guard<std::mutex> lock(ctx->waitMu);
+        if (ctx->state.load(std::memory_order_acquire) == TransportTaskState::CANCELED) {
+            UC_DEBUG(
+                "AsuTransportImpl::ProcessTask canceled during process task_id={} sub_batches={}",
+                ctx->taskId, subBatchContexts.size());
+            ReleaseAllSubBatchResources(subBatchContexts);
+            ctx->cv.notify_all();
+            return;
+        }
+
+        if (hasSubBatches) { ctx->subBatchContexts = std::move(subBatchContexts); }
+        ctx->InitializeTerminalSubBatchCount();
+        ctx->TryFinalizeFromSubBatches();
+
+        if (traceEnabled_) {
+            traceSnapshot =
+                trace::CaptureTraceSnapshot(*ctx, trace::SubBatchTracePhase::SUBMIT, config_.asuId);
+        }
+
+        UC_DEBUG(
+            "AsuTransportImpl::ProcessTask submitted task_id={} op_type={} entries={} keys={} "
+            "sub_batches={} done={} code={} message={}",
+            ctx->taskId, static_cast<int>(ctx->opType), ctx->entries.size, ctx->keys.size,
+            ctx->subBatchContexts.size(), ctx->Done(), static_cast<int>(ctx->finalStatus.code),
+            ctx->finalStatus.message);
+
+        for (auto& subBatchContext : ctx->subBatchContexts) {
+            if (subBatchContext.status.ok()) { continue; }
+            ReleaseSubBatchResources(subBatchContext);
+        }
+
+        if (ctx->Done()) { ctx->cv.notify_all(); }
     }
-
-    if (hasSubBatches) { ctx->subBatchContexts = std::move(subBatchContexts); }
-    ctx->InitializeTerminalSubBatchCount();
-    ctx->TryFinalizeFromSubBatches();
-    UC_DEBUG(
-        "AsuTransportImpl::ProcessTask submitted task_id={} op_type={} entries={} keys={} "
-        "sub_batches={} done={} code={} message={}",
-        ctx->taskId, static_cast<int>(ctx->opType), ctx->entries.size, ctx->keys.size,
-        ctx->subBatchContexts.size(), ctx->Done(), static_cast<int>(ctx->finalStatus.code),
-        ctx->finalStatus.message);
-
-    for (auto& subBatchContext : ctx->subBatchContexts) {
-        if (subBatchContext.status.ok()) { continue; }
-        ReleaseSubBatchResources(subBatchContext);
+    if (traceSnapshot.has_value()) {
+        trace::WriteTaskTrace(*traceSnapshot, traceOutput_, traceMu_);
     }
-
-    if (ctx->Done()) { ctx->cv.notify_all(); }
 }
 
 void AsuTransportImpl::PollTaskCompletions(const TransportTaskContextPtr& ctx)
 {
     if (!ctx) { return; }
 
-    std::lock_guard<std::mutex> lock(ctx->waitMu);
-    if (ctx->state.load(std::memory_order_acquire) != TransportTaskState::INFLIGHT) { return; }
-    if (ctx->subBatchContexts.empty()) { return; }
+    std::optional<trace::SubBatchTraceSnapshot> traceSnapshot;
+    {
+        std::lock_guard<std::mutex> lock(ctx->waitMu);
+        if (ctx->state.load(std::memory_order_acquire) != TransportTaskState::INFLIGHT) { return; }
+        if (ctx->subBatchContexts.empty()) { return; }
 
-    for (auto& subBatchContext : ctx->subBatchContexts) {
-        if (subBatchContext.state != TransportSubBatchState::PENDING) { continue; }
+        for (auto& subBatchContext : ctx->subBatchContexts) {
+            if (subBatchContext.state != TransportSubBatchState::PENDING) { continue; }
 
-        std::uint16_t completedCid = 0;
-        if (const auto status = protocolManager_->PollResponseCid(
-                reinterpret_cast<void*>(subBatchContext.flagBuffer.addr), completedCid);
-            !status.ok()) {
-            continue;
-        }
-        if (completedCid == 0 || completedCid != subBatchContext.cid) { continue; }
+            std::uint16_t completedCid = 0;
+            if (const auto status = protocolManager_->PollResponseCid(
+                    reinterpret_cast<void*>(subBatchContext.flagBuffer.addr), completedCid);
+                !status.ok()) {
+                continue;
+            }
+            if (completedCid == 0 || completedCid != subBatchContext.cid) { continue; }
 
-        KvResponse response;
-        const auto batchNumber = static_cast<std::uint16_t>(subBatchContext.entryStatus.size());
-        if (const auto status = protocolManager_->UnpackResponse(
-                reinterpret_cast<void*>(subBatchContext.flagBuffer.addr),
-                ToKvOpcode(subBatchContext.opType), batchNumber, response);
-            !status.ok()) {
-            std::fill(subBatchContext.entryStatus.begin(), subBatchContext.entryStatus.end(),
-                      status);
+            KvResponse response;
+            const auto batchNumber = static_cast<std::uint16_t>(subBatchContext.entryStatus.size());
+            if (const auto status = protocolManager_->UnpackResponse(
+                    reinterpret_cast<void*>(subBatchContext.flagBuffer.addr),
+                    ToKvOpcode(subBatchContext.opType), batchNumber, response);
+                !status.ok()) {
+                std::fill(subBatchContext.entryStatus.begin(), subBatchContext.entryStatus.end(),
+                          status);
+                CompleteSubBatch(*ctx, subBatchContext, status);
+                continue;
+            }
+
+            subBatchContext.status = KvResponseStatusToSubBatchStatus(response.status);
+            FillEntryStatusFromCqeResult(response, subBatchContext);
+
+            const bool queryResultBufferStatus =
+                subBatchContext.opType == TransportOpType::QUERY &&
+                subBatchContext.status.code == StatusCode::ASU_CQE_CHECK_RESULT_BUFFER;
+            const auto status = subBatchContext.status.ok() || queryResultBufferStatus
+                                    ? Status::OK()
+                                    : subBatchContext.status;
+            if (status.code == StatusCode::ASU_CQE_INTERNAL_ERROR ||
+                status.code == StatusCode::ASU_CQE_IO_TIMEOUT) {
+                connManager_->ReportFailure(subBatchContext.channel);
+            }
             CompleteSubBatch(*ctx, subBatchContext, status);
-            continue;
         }
-
-        subBatchContext.status = KvResponseStatusToSubBatchStatus(response.status);
-        FillEntryStatusFromCqeResult(response, subBatchContext);
-
-        const bool queryResultBufferStatus =
-            subBatchContext.opType == TransportOpType::QUERY &&
-            subBatchContext.status.code == StatusCode::ASU_CQE_CHECK_RESULT_BUFFER;
-        const auto status = subBatchContext.status.ok() || queryResultBufferStatus
-                                ? Status::OK()
-                                : subBatchContext.status;
-        if (status.code == StatusCode::ASU_CQE_INTERNAL_ERROR ||
-            status.code == StatusCode::ASU_CQE_IO_TIMEOUT) {
-            connManager_->ReportFailure(subBatchContext.channel);
+        ctx->TryFinalizeFromSubBatches();
+        if (traceEnabled_ && ctx->Done()) {
+            traceSnapshot = trace::CaptureTraceSnapshot(*ctx, trace::SubBatchTracePhase::COMPLETE,
+                                                        config_.asuId);
         }
-        CompleteSubBatch(*ctx, subBatchContext, status);
+        if (ctx->Done()) { ctx->cv.notify_all(); }
     }
-    ctx->TryFinalizeFromSubBatches();
-    if (ctx->Done()) { ctx->cv.notify_all(); }
+    if (traceSnapshot.has_value()) {
+        trace::WriteTaskTrace(*traceSnapshot, traceOutput_, traceMu_);
+    }
 }
 
 void AsuTransportImpl::BuildResult(const TransportTaskContext& ctx, TaskResult& result)

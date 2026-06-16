@@ -25,8 +25,10 @@
 
 #include <atomic>
 #include <cstdint>
+#include <fstream>
 #include <memory>
 #include <mutex>
+#include <ostream>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -141,6 +143,12 @@ private:
     std::mutex registeredRegionsMu_;
     std::atomic<MRHandle> nextMrHandle_{1};
     std::unordered_map<MRHandle, MemoryRegion> registeredRegions_;
+
+    // ASU sub-batch trace state, enabled by ASU_TRACE.
+    bool traceEnabled_{false};
+    std::mutex traceMu_;
+    std::ofstream traceFile_;
+    std::ostream* traceOutput_{nullptr};
 };
 
 }  // namespace UC::ASU
