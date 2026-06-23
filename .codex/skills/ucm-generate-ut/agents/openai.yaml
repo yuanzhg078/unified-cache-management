@@ -1,0 +1,4 @@
+interface:
+  display_name: "UCM GTest Generator"
+  short_description: "Generate focused C++ gtest UTs."
+  default_prompt: "Use $ucm-generate-ut to generate focused C++ gtest unit tests for this unified-cache-management function."
