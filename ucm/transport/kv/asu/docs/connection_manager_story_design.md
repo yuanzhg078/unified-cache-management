@@ -184,55 +184,55 @@ flowchart TB
       direction TB
 
     class AsuTransportImpl {
-        -transProvider_
-        -connManager_
-        -taskExecutor_
+        -transProvider_ : unique_ptr~TransProvider~
+        -connManager_ : unique_ptr~ConnectionManager~
+        -taskExecutor_ : unique_ptr~TransportTaskExecutor~
     }
 
     class TransportTaskExecutor {
-        -connManager_
-        +Execute()
-        +Poll()
-        +Cancel()
+        -connManager_ : ConnectionManager*
+        +Execute() : Status
+        +Poll() : Status
+        +Cancel() : Status
     }
 
     class ConnectionManager {
-        +AddGroup()
-        +SelectConnection()
-        +ReportSuccess()
-        +ReportFailure()
-        +StartRecoverLoop()
-        +Shutdown()
-        -groups_
-        -channelCache_
-        -drainList_
-        -provider_
-        -RecoverLoop()
+        +AddGroup() : Status
+        +SelectConnection() : shared_ptr~ConnectionChannel~
+        +ReportSuccess() : void
+        +ReportFailure() : void
+        +StartRecoverLoop() : void
+        +Shutdown() : Status
+        -groups_ : vector~ConnectionGroup~
+        -channelCache_ : vector~shared_ptr~ConnectionChannel~~
+        -drainList_ : vector~shared_ptr~ConnectionChannel~~
+        -provider_ : TransProvider*
+        -RecoverLoop() : void
     }
 
     class ConnectionGroup {
-        -groupId
-        -endpoint
-        -channels
-        +AddChannel()
-        +RemoveChannel()
+        -groupId : uint32_t
+        -endpoint : AsuEndpoint
+        -channels : vector~shared_ptr~ConnectionChannel~~
+        +AddChannel() : shared_ptr~ConnectionChannel~
+        +RemoveChannel() : void
     }
 
     class ConnectionChannel {
-        -handle_
-        -provider_
-        -state
-        -inflightCount
-        -errorCount
-        +GetConnection()
-        +ReleaseInflight()
-        +MarkForDrain()
+        -handle_ : ConnectionHandle
+        -provider_ : TransProvider*
+        -state : ChannelState
+        -inflightCount : atomic~uint32_t~
+        -errorCount : atomic~uint32_t~
+        +GetConnection() : ConnectionHandle
+        +ReleaseInflight() : void
+        +MarkForDrain() : bool
     }
 
     class TransProvider {
         <<interface>>
-        +CreateConnection()
-        +DeleteConnections()
+        +CreateConnection() : Status
+        +DeleteConnections() : vector~Status~
     }
 
     class AICPUTransProvider
