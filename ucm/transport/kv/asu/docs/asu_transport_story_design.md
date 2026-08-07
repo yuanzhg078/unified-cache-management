@@ -2,9 +2,9 @@
 
 ## 1. Story 需求描述
 
-ASU Transport 需要向 ASU Client 提供统一的异步 KV 传输能力：将 `LOAD`、`STORE`、`BATCH_LOAD`、`BATCH_STORE`、`DELETE` 和 `QUERY` 任务排队、流控拆分、下发和完成回调。一个上层任务可以携带任意数量的 entries 或 keys，而单个 ASU SQE 能承载的 I/O 数量受操作类型和 ASU 流控配置限制；因此 Transport 必须先将大 I/O 请求整形为满足单 SQE 上限的受控子批次流，再将子批次编排为可独立传输与完成的 I/O。
+ASU Transport 向 KVClient 提供统一的异步 KV 传输能力，接收并排队 `LOAD`、`STORE`、`BATCH_LOAD`、`BATCH_STORE`、`DELETE` 和 `QUERY` 请求，并对每个任务提供一次完成通知。KVClient 按业务语义组织 entries 或 keys；单个任务可包含任意数量的 I/O，但无需感知单个 ASU SQE 的 I/O 上限，也无需根据 ASU 流控配置自行拆分。ASU Transport 依据操作类型和流控配置将逻辑任务整形为顺序确定、单个 SQE 可承载且数量受控的子批次流。
 
-本 Story 的核心是：以 `IoScheduler` 根据 ASU 流控配置将逻辑任务整形为有序的 `SubBatch`，再由 Transport 串联 buffer、协议、连接、Provider、CQE 和回调，保证每个子批次资源成对申请/释放、每个任务只完成一次。连接池生命周期、路由和恢复属于 [ConnectionManager Story](./connection_manager_story_design.md)，本文件只描述 Transport 与它的协作边界。
+`IoScheduler` 为任务生成有序的 `SubBatch`，Transport 则将每个子批次编排为可独立下发和完成的 I/O：申请并绑定 buffer，完成协议打包和连接协作，经 Provider 下发 SQE，并根据 CQE 驱动其完成。子批次进入终态后，Transport 成对释放资源；全部子批次完成后，聚合任务结果并仅向 KVClient 回调一次。连接池生命周期、路由和恢复不在本文档范围内。
 
 ## 2. Story 背景描述
 
