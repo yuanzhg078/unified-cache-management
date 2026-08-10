@@ -2,20 +2,15 @@
 
 ## 1. Story 需求描述
 
-ASU Transport 向 KVClient 提供统一的异步 KV 传输能力，接收并排队 `LOAD`、`STORE`、`BATCH_LOAD`、`BATCH_STORE`、`DELETE` 和 `QUERY` 请求，并对每个任务提供一次完成通知。KVClient 按业务语义组织 entries 或 keys；单个任务可包含任意数量的 I/O，但无需感知单个 ASU SQE 的 I/O 上限，也无需根据 ASU 流控配置自行拆分。ASU Transport 依据操作类型和流控配置将逻辑任务整形为顺序确定、单个 SQE 可承载且数量受控的子批次流。
+`ASU Transport` 需要为 `KVClient` 提供统一的异步 KV 传输服务，支持提交 `LOAD`、`STORE`、`BATCH_LOAD`、`BATCH_STORE`、`DELETE` 和 `QUERY` 任务，并通过已配置的 `TransProvider` 将请求传输至 ASU。KVClient 可在一个任务中携带任意数量的 entries 或 keys；Transport 必须依据操作类型和 ASU 流控配置处理超出单个 SQE 承载上限的请求，使 KVClient 无需自行拆分或感知 SQE 限制。
 
-`IoScheduler` 为任务生成有序的 `SubBatch`，Transport 则将每个子批次编排为可独立下发和完成的 I/O：申请并绑定 buffer，完成协议打包和连接协作，经 Provider 下发 SQE，并根据 CQE 驱动其完成。子批次进入终态后，Transport 成对释放资源；全部子批次完成后，聚合任务结果并仅向 KVClient 回调一次。连接池生命周期、路由和恢复不在本文档范围内。
+对每个已受理任务，Transport 必须在全部 I/O 处理结束后向 KVClient 报告一次最终结果；无论任务成功、部分失败、下发失败、超时、取消或关闭，任务完成通知不得重复，且任务关联的 buffer、连接占用及其他传输资源必须得到释放。该 Story 不包括业务数据一致性、ASU ID 路由、Provider 的硬件实现，以及连接池的生命周期、路由和恢复策略。
 
 ## 2. Story 背景描述
 
-ASU Client 提交的任务面向业务语义，而 Provider 的 `Send()` 面向已打包的 `SendIoBatch`。二者之间存在四层转换：任务入队与生命周期管理、按 ASU 流控阈值整形大 I/O、子批次资源和连接绑定、CQE 驱动的完成与回收。若由各操作路径分别处理这些转换，会造成流控阈值不一致、buffer 泄漏、channel inflight 未归还或回调重复。
+KVClient 以业务语义提交任务：一个任务可以包含任意数量的 entries 或 keys，并以一次异步回调获取整体结果。底层 ASU 传输则以单个 SQE 为执行和完成单元，单个 SQE 可承载的 I/O 数量由操作类型和流控配置共同限定，并通过 `TransProvider` 下发、由 CQE 返回完成状态。
 
-因此 Transport 采用“**I/O 流控与传输执行分离**”的方式：
-
-1. `IoScheduler` 在 Init 时读取每种操作的 ASU 单 SQE 流控阈值，在 Execute 时按 `opType` 将连续输入整形为不超过阈值的 `BatchView`；
-2. `TransportTaskExecutor` 将每个 view 转成拥有 CID、buffer、channel、状态的 `TransportSubBatchContext`；
-3. `WorkerLoop` 专门执行准备和 Send，`CompletionLoop` 专门执行 Poll 和完成，二者通过 task 中保存的 contexts 衔接；
-4. `TransportTaskManager` 汇聚所有子批次的 entry status，只向上层发出一次 `onComplete`。
+因此，一个逻辑任务通常需要经历从大 I/O 请求到多个受控 SQE I/O、再从多个 I/O 完成状态到一次任务结果的转换。ASU Transport 负责统一编排这一转换过程，覆盖任务排队、流控整形、传输资源准备、下发、完成回收和结果聚合；由此保持各操作的流控规则、资源释放时机和完成语义一致，避免 SQE 超限、buffer 或连接占用未释放、子批次结果遗漏及同一任务重复回调。
 
 ## 3. Story 用户使用场景分析
 
@@ -78,21 +73,15 @@ flowchart LR
 
 ## 4. Story 设计描述
 
-### 4.1 Story 定义
+### 4.1 Story 设计描述
 
-> 作为 ASU Transport，我希望依据 ASU 单 SQE 的流控阈值把一次大 KV 请求整形为有序、受控的子批次流，并编排其请求打包、连接选择、批量下发、CQE 完成和资源回收，使上层只观察到一次可靠的异步任务完成。
+ASU Transport 将 KVClient 提交的逻辑任务编排为可在 ASU 上执行的异步 I/O。它依据不同操作的单 SQE 流控阈值，将大请求确定性地整形为有序、受控的子批次；上层无需感知拆分过程，只接收一次最终的异步完成结果。
 
-Transport 关注任务到子批次、子批次到 I/O、I/O 到任务结果的编排；不负责业务数据一致性、ASU ID 路由、Provider 的硬件实现或 ConnectionManager 的恢复策略。
+设计将逻辑计划与物理执行分离：`ScheduledIoBatch` 和 `ScheduledKeyBatch` 仅描述待执行的 I/O 范围，不持有传输资源；进入执行阶段后，Transport 为每个子批次创建 `TransportSubBatchContext`，记录其执行所需的标识、资源、连接和状态。Worker 串行完成准备与下发，Completion 串行轮询 CQE 并推进完成状态，通过 task mutex 保证两条路径对同一任务的安全交接。
 
-### 4.2 总体设计思路
+子批次可独立成功或失败，准备、选路和下发失败只终结对应子批次；待全部子批次进入终态后，Transport 汇聚结果并完成任务。Transport 在 CQE、超时、取消、下发失败和关闭等终态路径统一回收子批次关联的传输资源。该设计不覆盖业务数据一致性、ASU ID 路由、Provider 硬件实现及连接池恢复策略。
 
-1. **配置驱动流控**：`IoScheduler` 在构造时固化各操作的 ASU 单 SQE 流控阈值；运行期将大请求确定性地整形为不超过阈值的 `BatchView` 序列。
-2. **计划与执行解耦**：`ScheduledIoBatch`/`ScheduledKeyBatch` 是无资源的逻辑计划；`TransportSubBatchContext` 是绑定 CID、buffer 与 channel 的物理执行单元。
-3. **单线程下发、单线程完成**：Worker 串行创建和 Send contexts，Completion 串行轮询和完成 contexts；task mutex 保护两条路径对同一 task 的交接。
-4. **按子批次局部失败**：准备、选路或 Send 失败仅终结对应 sub-batch；task 在所有子批次终态后才汇聚为最终结果。
-5. **资源与终态绑定**：send slot、flag slot、channel inflight 由同一 `ReleaseSubBatchResources()` 在 CQE、超时、取消、下发失败及关闭路径统一释放。
-
-### 4.3 逻辑模型
+### 4.2 逻辑模型
 
 逻辑模型把 Transport 放回 ASU Client、Provider 和 ASU Store 组成的整体结构中。下文按能力域组织设计内容，但能力域不等同于图中的模块；其中 `IoScheduler` 是 Task Execution 使用的调度模块，而不是独立执行线程。
 
@@ -150,36 +139,146 @@ flowchart TB
 | Module | Buffer / Protocol / Connection | `buffer_manager.*`、`protocol_manager.*`、`connection_manager.*` | 分别提供资源、编解码和连接协作 |
 | Component | Transport Provider | `trans_provider.h` 及实现 | 向硬件发送 I/O |
 
-### 4.4 实现结构模型
+### 4.3 实现结构模型
+
+下图是 ASU Transport 的**核心 UML 类图**。为保持可读性，仅列出本 Story 的关键属性和操作；省略构造/析构、内存注册等生命周期细节，以及不影响对象关系的私有辅助函数。属性和操作均标注了类型、可见性及主要参数。
 
 ```mermaid
 classDiagram
   direction TB
-  class AsuTransportImpl { +Init() +Submit() +Cancel() +Shutdown() -ioScheduler_ -taskExecutor_ -taskManager_ -worker_ -completionWorker_ }
-  class IoScheduler { +SplitForAsu(entries, opType) +SplitForAsu(keys, opType) +GetSqeIoNum(opType) -batchLoadIoNum_ -batchStoreIoNum_ -deleteIoNum_ -queryIoNum_ }
-  class TransportTaskExecutor { +Execute(task) +Poll(task) +Cancel(task) -SubmitTaskRequests() -AssignSubBatchConnections() -BuildSubBatchSendBuffers() -SendSubBatchBuffers() -CompleteSubBatch() -ReleaseSubBatchResources() }
-  class TransportTaskManager { +Submit() +GetAll() +NotifyCompletion() }
-  class TransportTask { +InitializeRemainingSubBatchCount() +TryFinalizeFromSubBatches() -subBatchContexts -remainingSubBatchCount }
-  class TransportSubBatchContext { +cid +state +sendSge +flagBuffer +channel +entryStatus }
-  class BufferManager { +Allocate() +Free() }
-  class ProtocolManager { +PackRequest() +PollResponseCid() +UnpackResponse() }
-  class ConnectionManager { +SelectConnection() +ReportSuccess() +ReportFailure() }
-  class TransProvider { <<interface>> +Send() }
-  AsuTransportImpl *-- IoScheduler
-  AsuTransportImpl *-- TransportTaskExecutor
-  AsuTransportImpl *-- TransportTaskManager
-  TransportTaskExecutor --> IoScheduler : uses
-  TransportTaskExecutor --> BufferManager : uses
-  TransportTaskExecutor --> ProtocolManager : uses
-  TransportTaskExecutor --> ConnectionManager : uses
-  TransportTaskExecutor --> TransProvider : uses
-  TransportTaskManager o-- TransportTask
-  TransportTask *-- "0..*" TransportSubBatchContext
+  class AsuTransport {
+    <<interface>>
+    +Status Init(TransportConfig config)
+    +Status Submit(TransportTaskPtr task)
+    +Status Cancel(TaskId taskId)
+    +Status Shutdown()
+  }
+  class AsuTransportImpl {
+    -TransportConfig config_
+    -IoScheduler ioScheduler_
+    -unique_ptr~TransProvider~ transProvider_
+    -unique_ptr~TransportTaskExecutor~ taskExecutor_
+    -TransportTaskManager taskManager_
+    -SpscRingQueue~TransportTaskPtr~ executeQueue_
+    -thread worker_
+    -thread completionWorker_
+    +Status Init(TransportConfig config)
+    +Status Submit(TransportTaskPtr task)
+    +Status Cancel(TaskId taskId)
+    +Status Shutdown()
+    -void WorkerLoop()
+    -void CompletionLoop()
+  }
+  class IoScheduler {
+    -size_t batchLoadIoNum_
+    -size_t batchStoreIoNum_
+    -size_t deleteIoNum_
+    -size_t queryIoNum_
+    +vector~ScheduledIoBatch~ SplitForAsu(BatchView~KVBuffer~ entries, TransportOpType opType)
+    +vector~ScheduledKeyBatch~ SplitForAsu(BatchView~CacheKey~ keys, TransportOpType opType)
+    +size_t GetSqeIoNum(TransportOpType opType)
+  }
+  class ScheduledIoBatch {
+    +BatchView~KVBuffer~ entries
+  }
+  class ScheduledKeyBatch {
+    +BatchView~CacheKey~ keys
+  }
+  class TransportTaskExecutor {
+    -TransportConfig config_
+    -IoScheduler ioScheduler_
+    -TransProvider transProvider_
+    -BufferManager sendBufferManager_
+    -BufferManager flagBufferManager_
+    -ProtocolManager protocolManager_
+    -ConnectionManager connManager_
+    -atomic~uint16_t~ nextRequestCid_
+    +bool Execute(TransportTaskPtr task)
+    +bool Poll(TransportTaskPtr task)
+    +bool Cancel(TransportTaskPtr task, Status status)
+    -Status SubmitTaskRequests(TransportTask task, vector~TransportSubBatchContext~ contexts)
+    -Status AssignSubBatchConnections(vector~TransportSubBatchContext~ contexts)
+    -void CompleteSubBatch(TransportTask task, TransportSubBatchContext context, Status status)
+    -void ReleaseSubBatchResources(TransportSubBatchContext context)
+  }
+  class TransportTaskManager {
+    +void NotifyCompletion(TransportTaskPtr task)
+    +void BuildResult(TransportTask task, TaskResult result)
+  }
+  class TransportTask {
+    +TaskId taskId
+    +TransportOpType opType
+    +vector~CacheKey~ keys
+    +vector~KVBuffer~ entries
+    +uint64_t timeoutMs
+    +TransportTaskState state
+    +Status finalStatus
+    +uint32_t remainingSubBatchCount
+    +TaskCompletionCallback onComplete
+    +bool Done()
+    +void InitializeRemainingSubBatchCount()
+    +void TryFinalizeFromSubBatches()
+  }
+  class TransportSubBatchContext {
+    +uint16_t cid
+    +TransportOpType opType
+    +TransportSubBatchState state
+    +Status status
+    +shared_ptr~ConnectionChannel~ channel
+    +ScatterGatherEntry sendSge
+    +ScatterGatherEntry flagBuffer
+    +vector~Status~ entryStatus
+  }
+  class BufferManager {
+    -size_t slot_capacity_
+    -size_t slot_num_
+    -uint32_t tokenId_
+    +Status Init(string name, MemoryType type, size_t slotCapacity, size_t slotNum)
+    +Status Allocate(size_t size, ScatterGatherEntry sge)
+    +Status Free(uint32_t slotIndex)
+    +void Shutdown()
+  }
+  class ProtocolManager {
+    -unordered_map~KvOpcode,KvProtocol~ protocols_
+    +size_t GetPackedSize(KvOpcode opcode, SqeRequest request)
+    +Status PackRequest(void data, KvOpcode opcode, SqeRequest request)
+    +Status PollResponseCid(void data, uint16_t cid)
+    +Status UnpackResponse(void data, KvOpcode opcode, uint16_t batchNumber, KvResponse response)
+  }
+  class ConnectionManager {
+    -RoutingPolicy routingPolicy_
+    -uint32_t maxErrorCount_
+    +Status AddGroup(AsuEndpoint endpoint, uint32_t qpNum)
+    +shared_ptr~ConnectionChannel~ SelectConnection()
+    +void ReportSuccess(shared_ptr~ConnectionChannel~ channel)
+    +void ReportFailure(shared_ptr~ConnectionChannel~ channel)
+    +void StartRecoverLoop()
+    +Status Shutdown()
+  }
+  class TransProvider {
+    <<interface>>
+    +Status Send(vector~SendIoBatch~ ioBatches)
+  }
+  AsuTransport <|.. AsuTransportImpl : <<realization>>
+  AsuTransportImpl *-- IoScheduler : owns
+  AsuTransportImpl *-- TransportTaskExecutor : owns
+  AsuTransportImpl *-- TransportTaskManager : owns
+  AsuTransportImpl *-- BufferManager : owns send/flag buffers
+  AsuTransportImpl *-- TransProvider : owns
+  IoScheduler ..> ScheduledIoBatch : returns
+  IoScheduler ..> ScheduledKeyBatch : returns
+  TransportTaskExecutor ..> IoScheduler : <<usage>> splits task
+  TransportTaskExecutor ..> BufferManager : <<usage>> allocates/frees
+  TransportTaskExecutor ..> ProtocolManager : <<usage>> packs/unpacks
+  TransportTaskExecutor ..> ConnectionManager : <<usage>> selects/reports
+  TransportTaskExecutor ..> TransProvider : <<usage>> sends
+  TransportTaskManager ..> TransportTask : <<usage>> tracks/completes
+  TransportTask *-- "0..*" TransportSubBatchContext : owns
 ```
 
-一个 `TransportTask` 在进入 Worker 前只保存逻辑输入；`IoScheduler` 产生的 view 由 Executor 转成多个 `TransportSubBatchContext`。context 持有资源与 channel，直到终态回收，因此它是 Worker 与 Completion 两条流水线之间的唯一执行交接对象。
+一个 `TransportTask` 在进入 Worker 前只保存逻辑输入；`IoScheduler` 产生的 batch view 由 `TransportTaskExecutor` 转成多个 `TransportSubBatchContext`。context 持有资源与 channel，直到终态回收，因此它是 Worker 与 Completion 两条流水线之间的唯一执行交接对象。
 
-### 4.5 ASU Transport 上下文模型
+### 4.4 ASU Transport 上下文模型
 
 上下文模型只保留与本 Story 直接交互的协作者和真实 API。它展示“谁使用 Transport 提供的能力、Transport 又依赖谁”，而非内部实现顺序。
 
@@ -223,9 +322,9 @@ flowchart TB
   style Boundary fill:#FFF7DC,stroke:#9A7B35,color:#1F2937
 ```
 
-### 4.6 Story 运行时序
+### 4.5 Story 运行时序
 
-#### 4.6.1 Story 总体运行时序
+#### 4.5.1 Story 总体运行时序
 
 ```mermaid
 sequenceDiagram
@@ -259,7 +358,16 @@ sequenceDiagram
   TM-->>C: onComplete(result)
 ```
 
-#### 4.6.2 I/O 流控与拆分时序
+时序步骤：
+
+1. `ClientTaskManager` 调用 `Submit(task)`；Transport 为任务登记 `taskId`、截止时间，并压入执行队列。
+2. `WorkerLoop` 取出任务，`TransportTaskExecutor` 将状态从 `PENDING` 原子切换为 `INFLIGHT`。
+3. Executor 调用 `IoScheduler` 按操作类型拆分逻辑输入，并为每个子批次创建 context、打包 SQE、申请 buffer。
+4. Executor 为可下发的子批次选择 channel，并经 `TransProvider::Send()` 批量下发；随后保存 contexts 并初始化剩余子批次数。
+5. `CompletionLoop` 每 1 ms 轮询任务：从 flag buffer 获取 CID、解析 CQE，向 `ConnectionManager` 反馈连接结果，并完成及回收已终态的子批次。
+6. 所有子批次终态后，Executor 通知 `TransportTaskManager`；后者汇聚结果并仅调用一次 `onComplete(result)`。
+
+#### 4.5.2 I/O 流控与拆分时序
 
 ```mermaid
 sequenceDiagram
@@ -282,7 +390,15 @@ sequenceDiagram
   Note over S: 仅按阈值整形与切分 view，不分配 CID、buffer 或连接
 ```
 
-#### 4.6.3 生命周期与任务编排时序
+时序步骤：
+
+1. Executor 根据 `opType` 向 `IoScheduler` 查询单个 SQE 可承载的 I/O 阈值。
+2. 对 `LOAD`、`STORE`、`BATCH_LOAD`、`BATCH_STORE`，Scheduler 将 `task.entries` 切分为连续的 `ScheduledIoBatch` 列表。
+3. 对 `DELETE`、`QUERY`，Scheduler 将 `task.keys` 切分为连续的 `ScheduledKeyBatch` 列表。
+4. 每个输出 batch 都不超过该操作的阈值，合并后仍与原输入顺序和内容一致。
+5. Executor 依据每个 batch 创建一个 `TransportSubBatchContext`；此阶段只形成逻辑执行单元，不申请 CID、buffer 或连接。
+
+#### 4.5.3 生命周期与任务编排时序
 
 ```mermaid
 sequenceDiagram
@@ -307,7 +423,16 @@ sequenceDiagram
   T->>P: DeleteConnections()
 ```
 
-#### 4.6.4 子批次下发编排时序
+时序步骤：
+
+1. Client 调用 `Init(config)`，Transport 创建并配置 `IoScheduler` 与 `TransProvider`。
+2. Transport 创建连接组并启动连接恢复循环，然后初始化 send buffer 与 flag buffer。
+3. Transport 将 scheduler、provider、buffer、protocol 和 connection 等协作者注入 `TransportTaskExecutor`。
+4. 依赖就绪后，Transport 启动 `WorkerLoop` 和 `CompletionLoop`，开始接受异步任务。
+5. Client 调用 `Submit(task)` 时，Transport 设置 `taskId` 和 deadline 后将任务入队；下发不在调用线程执行。
+6. Client 调用 `Shutdown()` 时，Transport 停止工作线程、取消未完成任务、关闭连接管理器，并删除 Provider 侧连接。
+
+#### 4.5.4 子批次下发编排时序
 
 ```mermaid
 sequenceDiagram
@@ -341,7 +466,17 @@ sequenceDiagram
   E->>E: 保存 contexts，InitializeRemainingSubBatchCount()
 ```
 
-#### 4.6.5 完成、回收与回调时序
+时序步骤：
+
+1. `WorkerLoop` 调用 `Execute(task)`；Executor 仅在成功将任务从 `PENDING` 切换到 `INFLIGHT` 后继续执行。
+2. Executor 调用 Scheduler 生成受流控阈值限制的 scheduled batches。
+3. 对每个 batch，Executor 分配唯一 CID 和 flag buffer，计算并打包请求，再申请用于下发的 send SGE。
+4. Executor 为各子批次选择可用 channel。
+5. 若没有可用 channel，对应 context 以 `CONNECTION_ERROR` 进入完成态；其余子批次不受影响。
+6. 若存在可用 channel，Executor 构建待发送 I/O 批次并调用 `Send()`；仅发送失败的 channel 会被报告为失败。
+7. Executor 将全部 contexts 挂到 task 上，初始化 `remainingSubBatchCount`，由 CompletionLoop 继续推进终态。
+
+#### 4.5.5 完成、回收与回调时序
 
 ```mermaid
 sequenceDiagram
@@ -373,11 +508,20 @@ sequenceDiagram
   end
   E->>E: TryFinalizeFromSubBatches()
   alt remaining = 0
-    E->>TM: NotifyCompletion(task)
+  E->>TM: NotifyCompletion(task)
   end
 ```
 
-### 4.7 任务与子批次状态模型
+时序步骤：
+
+1. `CompletionLoop` 调用 `Poll(task)`，检查任务 deadline 和所有仍为 `PENDING` 的子批次 context。
+2. 若任务已超时，Executor 将关联 channel 报告为失败，并以 `TIMEOUT` 完成对应子批次。
+3. 对未超时的 context，Executor 从 flag buffer 读取响应 CID；CID 未匹配时保持 `PENDING`，等待下一轮轮询。
+4. CID 匹配后，Executor 调用 `UnpackResponse()` 解析 CQE；连接类错误报告失败，其余成功或业务结果报告成功。
+5. Executor 释放 send/flag buffer slot、归还 channel inflight，并调用 `CompleteSubBatch()` 写入该子批次终态。
+6. Executor 汇总子批次结果；仅当 `remainingSubBatchCount` 变为 0 时，才通知 `TransportTaskManager` 完成任务和触发回调。
+
+### 4.6 任务与子批次状态模型
 
 ```mermaid
 stateDiagram-v2
@@ -524,6 +668,21 @@ flowchart LR
 | 局部失败 | 一个 sub-batch 失败不阻止其它可发送子批次完成 |
 | 连接职责隔离 | Transport 只选择/反馈/释放 channel；恢复和路由策略属于 ConnectionManager |
 
-## 11. 一句话总结
+## 11. SFMEA 分析
+
+本节以可执行的故障注入用例记录 Transport 的主要单点故障模式。故障注入方法应通过测试桩、Mock、Hook、受控状态篡改或并发栅栏实现，不依赖生产环境制造故障。
+
+| 用例编号 | 故障模式 | 是否涉及 | 故障影响 | 容错措施 | 故障注入方法 | 备注 |
+|---|---|---|---|---|---|---|
+| AT-SFMEA-01 | Provider 未构建、类型不支持或初始化失败 | 是 | Transport 初始化失败，任务不会被受理 | `Init()` 返回明确错误，并清理已创建资源 | 打桩 Provider 工厂或 `Init()` 依赖，使指定 Provider 创建失败或返回不支持类型 | 验证失败后线程、buffer 和连接结构均未遗留 |
+| AT-SFMEA-02 | 空任务、执行队列已满或关闭期间提交 | 是 | 当前任务无法进入执行队列 | 参数校验；队列压入失败时从 TaskManager 移除任务 | 传入空 `TransportTask`；将测试队列填满；使用线程栅栏并发触发 `Submit()` 与 `Shutdown()` | 验证立即返回失败，且 TaskManager 中无悬挂任务 |
+| AT-SFMEA-03 | 批处理操作的单 SQE I/O 阈值为 0 | 是 | 拆分计算异常，无法保证任务处理 | 默认配置提供非零阈值；当前尚无显式非零校验 | 构造 `TransportConfig`，将 `asuBatchLoadIoNum`、`asuBatchStoreIoNum`、`asuDeleteIoNum` 或 `asuQueryIoNum` 设为 0 后执行批处理任务 | 已识别的配置校验缺口；建议补充 Init 阶段校验 |
+| AT-SFMEA-04 | buffer 申请、MR 解析或协议打包失败 | 是 | 对应子批次无法构造为可发送 I/O，任务可能部分失败 | 子批次局部终结；终态统一回收已申请资源 | 打桩 `BufferManager::Allocate()`、MR 查询或 `ProtocolManager::PackRequest()` 返回错误 | 验证其余可发送子批次仍继续执行 |
+| AT-SFMEA-05 | 无可用连接或 Provider 下发失败 | 是 | 对应子批次无法进入正常完成轮询 | 按子批次记录失败、反馈连接结果并回收资源 | 打桩 `ConnectionManager::SelectConnection()` 返回空；或打桩 `TransProvider::Send()` 返回失败状态 | 验证其他子批次不被阻塞，最终结果正确聚合 |
+| AT-SFMEA-06 | CQE 缺失、CID 不匹配或响应解析失败 | 是 | 子批次超时或失败，任务可能部分失败 | 仅匹配 CID 后解析；按 deadline 终结并回收资源 | Hook flag buffer 内容，写入错误 CID 或畸形响应；或令 Fake Provider 不写入 CQE | 验证超时受 `timeoutMs` 约束，轮询周期约为 1 ms |
+| AT-SFMEA-07 | CQE、超时、取消或关闭并发导致重复完成 | 是 | 可能破坏上层一次完成语义 | 非 `PENDING` 子批次不重复完成；`completionNotified` CAS 保证任务至多回调一次 | 用线程栅栏并发触发 `Poll()`、`Cancel()` 和 `Shutdown()`，并统计回调次数 | 验证回调恰好一次，且资源只回收一次 |
+| AT-SFMEA-08 | 关闭时存在在途任务 | 是 | 在途任务可能遗留资源或不返回结果 | 停止新执行；等待配置超时；取消未完成任务并统一回收 | 通过 Fake Provider 延迟 CQE，在任务处于 `INFLIGHT` 时调用 `Shutdown()` | 验证任务以取消结果结束；关闭等待最多一个 `timeoutMs` 后进入取消收敛 |
+
+## 12. 一句话总结
 
 `IoScheduler` 依据 ASU 流控配置决定“大 I/O 请求应被整形为哪些受控 SQE 工作单元”，而 ASU Transport 决定“这些工作单元如何安全地变成一次可发送、可完成、可回收并最终只回调一次的异步 I/O”。

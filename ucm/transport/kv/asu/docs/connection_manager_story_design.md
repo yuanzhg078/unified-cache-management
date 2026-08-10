@@ -760,6 +760,21 @@ flowchart LR
 - `shared_ptr` 只保证对象和 handle 的生命周期，不保证故障连接仍能成功通信；
 - 当前运行顺序是先完成连接池初始化，再启动恢复线程和业务 worker；关闭时先停止业务任务，再关闭 Manager。
 
-## 11. 一句话总结
+## 11. SFMEA 分析
+
+本节以可执行的故障注入用例记录连接管理的主要单点故障模式。故障注入方法应通过测试桩、Mock、Hook、受控状态篡改或并发栅栏实现，不依赖生产环境制造故障。
+
+| 用例编号 | 故障模式 | 是否涉及 | 故障影响 | 容错措施 | 故障注入方法 | 备注 |
+|---|---|---|---|---|---|---|
+| CM-SFMEA-01 | 初始建链失败 | 是 | 对应 endpoint 无法提供 channel；初始化可能失败 | `AddGroup()` 返回错误，上层初始化失败路径清理已创建资源 | 打桩 `TransProvider::CreateConnection()`，使初始建链调用返回连接错误 | 验证无残留 Group、channel 或 Provider handle |
+| CM-SFMEA-02 | 无可用 channel | 是 | 当前 I/O 无法下发，任务可能部分失败 | 仅选择 `ACTIVE` 且未达到 inflight 上限的 channel；无可用连接时返回空 | 通过测试访问接口将全部 `ConnectionChannel` 置为 `DRAINING`；或将 inflight 计数置为上限 | 验证不向失效或超限连接发送 I/O |
+| CM-SFMEA-03 | inflight 未归还 | 是 | 可用并发容量持续下降，严重时全部 channel 不可选 | `ReleaseInflight()` 以原子 CAS 防止计数为负；Transport 终态路径对称释放 | 在 Transport 子批次终态路径设置 Hook，跳过一次 `ReleaseInflight()` 调用 | 调用侧契约风险；验证异常路径后 inflight 计数最终归零 |
+| CM-SFMEA-04 | 连续连接失败未达阈值 | 是 | 短时错误不会立即隔离连接，可能出现后续下发失败 | `ReportFailure()` 累计错误，达到阈值前保留连接 | 使用测试桩连续调用 `ConnectionManager::ReportFailure(channel)`，次数设为 `maxErrorCount - 1` | 验证 channel 保持 `ACTIVE`，错误计数递增 |
+| CM-SFMEA-05 | 连续连接失败达到阈值 | 是 | 故障 channel 停止参与新请求调度 | `MarkForDrain()` CAS 将 channel 置为 `DRAINING` 并加入恢复队列 | 连续调用 `ReportFailure(channel)` 至 `maxErrorCount`；Mock `MarkForDrain()` 观察其只成功一次 | 验证后续 `SelectConnection()` 不返回该 channel |
+| CM-SFMEA-06 | 恢复建链失败 | 是 | 可用连接数下降；全部替换失败时后续 I/O 无法下发 | 失败 channel 保留在 `drainList`，恢复线程后续周期重试 | 先触发 channel drain，再打桩恢复阶段的 `CreateConnection()` 持续返回失败 | 当前重试周期为 100 ms；验证 channel 未错误恢复为 `ACTIVE` |
+| CM-SFMEA-07 | 恢复建链成功 | 是 | 故障 channel 被可用新 channel 替代 | 在原 Group 中移除旧 channel、加入新的 `ACTIVE` channel 并刷新缓存 | 先触发 channel drain，再令打桩的 `CreateConnection()` 在下一恢复周期返回有效 handle | 验证新 channel 可被选择；旧 channel 由在途 `shared_ptr` 保活 |
+| CM-SFMEA-08 | 关闭期间仍请求调度或恢复 | 是 | 可能访问已释放连接，或导致关闭无法收敛 | `shuttingDown_` 阻止新选择/建组；停止并 join 恢复线程后清理连接结构 | 使用线程栅栏控制 `Shutdown()` 与 `SelectConnection()` / `ReportFailure()` 并发执行；Hook 恢复线程停在建链前后 | 验证关闭后不返回 channel，恢复线程已退出 |
+
+## 12. 一句话总结
 
 > `ConnectionManager` 是一个完整的连接池生命周期 Story：它按 endpoint 建立多 channel 连接池，为 Transport 请求分配和计量连接，并通过连续错误隔离与后台单 channel 替换维持连接池可用性。
