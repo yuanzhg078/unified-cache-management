@@ -604,11 +604,35 @@ group 数量 = endpoints 数量
 
 ### 5.2 重点实现接口
 
-| 接口                                                    | 契约                                                           |
-| ----------------------------------------------------- | ------------------------------------------------------------ |
-| `Status AddGroup(const AsuEndpoint&, uint32_t qpNum)` | 为一个 endpoint 创建一个 group，并将 Provider 返回的 handles 封装为 channels |
-| `void StartRecoverLoop()`                             | 在全部 group 初始化完成后启动后台恢复线程                                     |
-| `Status Shutdown()`                                   | 禁止新选择，停止恢复线程并释放 Manager 持有的连接结构                              |
+连接组构建接口，用于为一个 endpoint 创建连接组，并将 Provider 创建的底层连接封装为可调度的 channel。
+
+入参：endpoint、该 endpoint 需要创建的连接数量 `qp_num`。
+
+出参：创建结果 `Status`；成功时新增一个完整的 `ConnectionGroup`，失败时不保留不完整的 group。
+
+```cpp
+Status AddGroup(const AsuEndpoint& endpoint, std::uint32_t qp_num);
+```
+
+恢复线程启动接口，用于在全部连接组初始化完成后，启动消费 `drainList_` 的后台恢复线程。
+
+入参：无。
+
+出参：无。
+
+```cpp
+void StartRecoverLoop();
+```
+
+连接池关闭接口，用于禁止后续连接选择和建组，停止恢复线程，并释放 Manager 持有的连接结构。
+
+入参：无。
+
+出参：关闭结果 `Status`；重复调用应保持幂等。
+
+```cpp
+Status Shutdown();
+```
 
 ### 5.3 重点依赖接口
 
@@ -649,10 +673,25 @@ flowchart LR
 
 ### 6.2 重点实现接口
 
-| 接口                                                 | 契约                                    |
-| -------------------------------------------------- | ------------------------------------- |
-| `shared_ptr<ConnectionChannel> SelectConnection()` | 选择连接并原地增加 inflight；无可用连接时返回 `nullptr` |
-| `void ConnectionChannel::ReleaseInflight()`        | 请求结束时归还由选择操作占用的并发配额                   |
+连接选择接口，用于从全部 `ACTIVE` 且未达到并发上限的 channel 中按当前路由策略选择一个连接，并完成本次请求的并发占用。
+
+入参：无。
+
+出参：已增加一次 `inflight` 的 `shared_ptr<ConnectionChannel>`；没有可用连接或 Manager 已关闭时返回 `nullptr`。
+
+```cpp
+std::shared_ptr<ConnectionChannel> SelectConnection();
+```
+
+并发占用释放接口，用于在请求正常完成、失败、超时、取消或关闭清理时，归还 `SelectConnection()` 为该请求占用的一个并发配额。
+
+入参：无；调用对象为本次请求持有的 `ConnectionChannel`。
+
+出参：无。
+
+```cpp
+void ConnectionChannel::ReleaseInflight();
+```
 
 ### 6.3 重点依赖接口
 
@@ -696,11 +735,35 @@ Group、cache、drainList 和执行中的 sub-batch 可能同时引用同一个 
 
 ### 7.2 重点实现接口
 
-| 接口                                                         | 契约                        |
-| ---------------------------------------------------------- | ------------------------- |
-| `void ReportFailure(const shared_ptr<ConnectionChannel>&)` | 累加连续错误；达到阈值时只触发一次 drain   |
-| `void ReportSuccess(const shared_ptr<ConnectionChannel>&)` | 清零连续错误计数                  |
-| `void StartRecoverLoop()`                                  | 启动消费 `drainList_` 的后台恢复循环 |
+连接失败反馈接口，用于记录调用侧已判定的连接相关故障；连续失败达到阈值时，将该 channel 隔离并加入恢复队列。
+
+入参：发生连接相关故障的 channel。
+
+出参：无；同一 channel 的 `ACTIVE` 到 `DRAINING` 状态转换至多触发一次。
+
+```cpp
+void ReportFailure(const std::shared_ptr<ConnectionChannel>& channel);
+```
+
+连接成功反馈接口，用于在请求正常完成或调用侧判定为非连接故障时，清零 channel 的连续错误计数。
+
+入参：本次请求使用的 channel。
+
+出参：无。
+
+```cpp
+void ReportSuccess(const std::shared_ptr<ConnectionChannel>& channel);
+```
+
+恢复线程启动接口，用于启动后台循环以消费 `drainList_`，为隔离的 channel 创建替代连接。
+
+入参：无。
+
+出参：无。
+
+```cpp
+void StartRecoverLoop();
+```
 
 `RecoverLoop()`、`MarkForDrain()` 和 `RebuildChannelCache()` 是 Shard 内部实现点，不作为调用侧接口展开。
 
@@ -775,6 +838,70 @@ flowchart LR
 | CM-SFMEA-07 | 恢复建链成功 | 是 | 故障 channel 被可用新 channel 替代 | 在原 Group 中移除旧 channel、加入新的 `ACTIVE` channel 并刷新缓存 | 先触发 channel drain，再令打桩的 `CreateConnection()` 在下一恢复周期返回有效 handle | 验证新 channel 可被选择；旧 channel 由在途 `shared_ptr` 保活 |
 | CM-SFMEA-08 | 关闭期间仍请求调度或恢复 | 是 | 可能访问已释放连接，或导致关闭无法收敛 | `shuttingDown_` 阻止新选择/建组；停止并 join 恢复线程后清理连接结构 | 使用线程栅栏控制 `Shutdown()` 与 `SelectConnection()` / `ReportFailure()` 并发执行；Hook 恢复线程停在建链前后 | 验证关闭后不返回 channel，恢复线程已退出 |
 
-## 12. 一句话总结
+## 12. 开发自验证用例
+
+以下用例用于开发阶段的单元自验证，推荐基于 `FakeTransProvider` 执行，不依赖真实 AICPU/AIV 设备或 ASU Store。异步恢复相关断言使用可控的 Fake Provider 或条件等待，避免用固定时长 `sleep` 作为判定条件。
+
+### 12.1 连接组构建与连接选择用例
+
+测试点：多个 endpoint 的连接组构建，以及 `ACTIVE` channel 是否能够进入统一调度视图。
+
+测试手段：使用 `FakeTransProvider` 为两个 endpoint 分别创建指定数量的 handles；连续调用 `AddGroup()` 和 `SelectConnection()`，记录返回 channel 的 Group ID。
+
+预期行为：每个 endpoint 对应一个 `ConnectionGroup`；所有创建成功的 channel 都可被选择；Round Robin 策略能够跨 group 轮询，且每次成功选择都会将该 channel 的 `inflight` 增加 1。
+
+```cpp
+TEST(ConnectionManagerTest, AddGroupBuildsChannelsAndSelectsAcrossGroups)
+{
+    // 为两个 endpoint 创建 group，验证返回 channel 覆盖两个 group。
+}
+```
+
+### 12.2 连接并发占用与释放用例
+
+测试点：连接选择和并发配额释放的一致性。
+
+测试手段：为单个 endpoint 创建一个 channel，调用 `SelectConnection()` 获取 channel，检查其 `inflight`；随后调用 `ReleaseInflight()`，再检查 `inflight` 和连接可选择性。
+
+预期行为：成功选择后 `inflight` 从 0 增至 1；释放后恢复为 0；重复释放不会使计数变为负数；当所有 channel 的 `inflight` 均达到 256 时，`SelectConnection()` 返回 `nullptr`。
+
+```cpp
+TEST(ConnectionManagerTest, SelectAndReleaseInflightAreSymmetric)
+{
+    // SelectConnection() 后校验 inflight +1，ReleaseInflight() 后校验恢复。
+}
+```
+
+### 12.3 连接失败隔离与恢复用例
+
+测试点：连续连接失败达到阈值后，故障 channel 的隔离和替代连接恢复。
+
+测试手段：以可控 `FakeTransProvider` 创建初始连接并启动恢复线程；对选中的 channel 连续调用 `ReportFailure()` 至 `maxErrorCount_`，令 Fake Provider 在恢复阶段返回新的有效 handle。
+
+预期行为：达到阈值前 channel 保持 `ACTIVE`；达到阈值后仅一次转换为 `DRAINING`，后续 `SelectConnection()` 不再返回该 channel；恢复成功后，同一 Group 中出现新的 `ACTIVE` channel 并可被选择，旧 channel 在其最后一个 `shared_ptr` 释放前仍然存活。
+
+```cpp
+TEST(ConnectionManagerTest, ReportFailureDrainsAndRecoversChannel)
+{
+    // 触发阈值，等待 Fake Provider 完成替代建链，再验证新旧 channel 生命周期。
+}
+```
+
+### 12.4 连接池关闭用例
+
+测试点：关闭过程的资源回收、拒绝后续调度以及幂等性。
+
+测试手段：创建连接组并启动恢复线程后调用 `Shutdown()`；再次调用 `Shutdown()`，并在两次关闭后尝试 `SelectConnection()` 和 `AddGroup()`。
+
+预期行为：首次关闭成功停止恢复线程并清理 Manager 持有的连接结构；关闭后 `SelectConnection()` 返回 `nullptr`，`AddGroup()` 返回失败；重复关闭不重复删除 Provider handle，且仍返回成功状态。
+
+```cpp
+TEST(ConnectionManagerTest, ShutdownReleasesResourcesAndIsIdempotent)
+{
+    // 验证关闭后的拒绝行为，以及 Fake Provider 的 DeleteConnections 调用次数。
+}
+```
+
+## 13. 一句话总结
 
 > `ConnectionManager` 是一个完整的连接池生命周期 Story：它按 endpoint 建立多 channel 连接池，为 Transport 请求分配和计量连接，并通过连续错误隔离与后台单 channel 替换维持连接池可用性。

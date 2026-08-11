@@ -569,11 +569,35 @@ flowchart LR
 
 ### 5.2 重点实现接口
 
+I/O 批次拆分接口，用于按照操作类型对应的单 SQE I/O 上限，将 entry 批次切分为保持原有顺序的多个受控子批次。
+
+入参：待处理的 entry 视图 `entries`、操作类型 `opType`。
+
+出参：按流控阈值切分后的 `ScheduledIoBatch` 列表；输出 view 覆盖全部输入 entry，且不分配 CID、buffer slot 或连接资源。
+
 ```cpp
 std::vector<IoScheduler::ScheduledIoBatch> SplitForAsu(
     const BatchView<KVBuffer>& entries, TransportOpType opType) const;
+```
+
+Key 批次拆分接口，用于按照操作类型对应的单 SQE I/O 上限，将 key 批次切分为保持原有顺序的多个受控子批次。
+
+入参：待处理的 key 视图 `keys`、操作类型 `opType`。
+
+出参：按流控阈值切分后的 `ScheduledKeyBatch` 列表；输出 view 覆盖全部输入 key，且不产生运行资源副作用。
+
+```cpp
 std::vector<IoScheduler::ScheduledKeyBatch> SplitForAsu(
     const BatchView<CacheKey>& keys, TransportOpType opType) const;
+```
+
+单 SQE I/O 上限查询接口，用于查询指定操作类型在当前配置下允许承载的最大 I/O 数量。
+
+入参：操作类型 `opType`。
+
+出参：单个 SQE 的 I/O 上限；`LOAD` 和 `STORE` 固定返回 1，批处理操作返回对应配置值。
+
+```cpp
 std::size_t GetSqeIoNum(TransportOpType opType) const;
 ```
 
@@ -593,10 +617,43 @@ std::size_t GetSqeIoNum(TransportOpType opType) const;
 
 ### 6.2 重点实现接口
 
+Transport 初始化接口，用于按依赖顺序创建 Provider、连接管理、Buffer、协议、任务执行等组件，并在全部依赖可用后启动 Worker。
+
+入参：Transport 配置 `config`。
+
+出参：初始化结果 `Status`；任一依赖初始化失败时返回错误，并清理已创建资源。
+
 ```cpp
 Status AsuTransportImpl::Init(const TransportConfig& config);
+```
+
+任务提交接口，用于校验并登记任务，再将任务投递到 Worker 执行队列；不在调用线程执行调度或发送。
+
+入参：待执行任务 `task`。
+
+出参：提交结果 `Status`；任务为空、Transport 已关闭或队列不可写时返回错误，且不遗留待完成任务。
+
+```cpp
 Status AsuTransportImpl::Submit(const TransportTaskPtr& task);
+```
+
+任务取消接口，用于将未完成任务及其仍处于 `PENDING` 的子批次收敛为指定失败状态，并回收已申请资源。
+
+入参：待取消任务 `task`、用于标记终态的 `status`。
+
+出参：是否由本次调用实际完成了任务取消；已完成或空任务返回 `false`。
+
+```cpp
 bool TransportTaskExecutor::Cancel(const TransportTaskPtr& task, const Status& status);
+```
+
+Transport 关闭接口，用于停止接收新任务，取消或等待在途任务收敛，停止 Worker，并按依赖逆序释放资源。
+
+入参：无。
+
+出参：关闭结果 `Status`；重复调用保持幂等。
+
+```cpp
 Status AsuTransportImpl::Shutdown();
 ```
 
@@ -612,10 +669,43 @@ Worker 从任务中取得 `IoScheduler` 已按流控阈值整形好的子批次�
 
 ### 7.2 重点依赖接口
 
+连接选择接口，用于为可发送的子批次取得一个已占用并发配额的 channel。
+
+入参：无。
+
+出参：可用的 `ConnectionChannel`；没有可用连接时返回 `nullptr`，当前子批次应终结为 `CONNECTION_ERROR`。
+
 ```cpp
 std::shared_ptr<ConnectionChannel> ConnectionManager::SelectConnection();
+```
+
+Buffer 分配接口，用于为 SQE 请求或 CQE 标志申请一个可独占使用的 buffer slot。
+
+入参：所需字节数 `size`、接收分配结果的散聚条目 `sge`。
+
+出参：分配结果 `Status`；成功时写入 slot 和地址信息，失败时当前子批次进入失败回收路径。
+
+```cpp
 Status BufferManager::Allocate(std::size_t size, ScatterGatherEntry& sge);
-Status ProtocolManager::PackRequest(void* data, KvOpcode opcode, const KvRequest& request);
+```
+
+SQE 请求打包接口，用于将构造完成的请求按操作码编码到 send buffer。
+
+入参：目标 buffer 地址 `data_ptr`、操作码 `opcode`、待编码的 `SqeRequest`。
+
+出参：打包结果 `Status`；失败时不应发送该子批次。
+
+```cpp
+Status ProtocolManager::PackRequest(void* data_ptr, KvOpcode opcode, const SqeRequest& req);
+```
+
+批量发送接口，用于将已经绑定 connection、send buffer 与 flag buffer 的子批次交给底层 Provider 下发。
+
+入参：待发送批次 `ioBatches`、kernel 数 `kernelCount`、quiet 数 `quietCount`。
+
+出参：逐批次发送结果列表；列表长度应与 `ioBatches` 一致，每个失败项只终结对应子批次。
+
+```cpp
 std::vector<Status> TransProvider::Send(const std::vector<SendIoBatch>& ioBatches,
                                         std::uint32_t kernelCount, std::uint32_t quietCount);
 ```
@@ -632,12 +722,54 @@ std::vector<Status> TransProvider::Send(const std::vector<SendIoBatch>& ioBatche
 
 ### 8.2 重点实现接口
 
+任务轮询接口，用于检查任务中处于 `PENDING` 状态的子批次是否已收到匹配 CQE、已超时或已全部完成。
+
+入参：待轮询任务 `task`。
+
+出参：任务是否已经到达终态；到达终态时调用侧可以通知任务完成。
+
 ```cpp
 bool TransportTaskExecutor::Poll(const TransportTaskPtr& task);
-Status ProtocolManager::PollResponseCid(const void* data, std::uint16_t& cid);
-Status ProtocolManager::UnpackResponse(const void* data, KvOpcode opcode,
-                                       std::uint16_t batchNum, KvResponse& response);
+```
+
+CQE CID 读取接口，用于从 flag buffer 中读取完成 CID，供 Executor 与子批次期望 CID 做匹配。
+
+入参：CQE/flag buffer 地址 `data_ptr`、接收 CID 的 `cid`。
+
+出参：读取结果 `Status`；只有 CID 匹配时才继续解析完整响应。
+
+```cpp
+Status ProtocolManager::PollResponseCid(const void* data_ptr, std::uint16_t& cid) const;
+```
+
+CQE 响应解包接口，用于在 CID 匹配后解析协议响应和逐 entry 结果。
+
+入参：CQE/flag buffer 地址、操作码、当前子批次的 entry 数量、接收响应的 `KvResponse`。
+
+出参：解包结果 `Status`；成功时填充响应及 entry 状态，失败时当前子批次进入错误终态。
+
+```cpp
+Status ProtocolManager::UnpackResponse(const void* data_ptr, KvOpcode opcode,
+                                       std::uint16_t batch_number, KvResponse& out);
+```
+
+子批次资源回收接口，用于释放一个子批次占用的 send slot、flag slot 和 channel inflight。
+
+入参：待回收的子批次上下文 `context`。
+
+出参：无；重复进入回收路径不得重复释放同一资源。
+
+```cpp
 void TransportTaskExecutor::ReleaseSubBatchResources(TransportSubBatchContext& context);
+```
+
+任务完成通知接口，用于汇总所有子批次结果、触发上层回调并从 TaskManager 移除任务。
+
+入参：已达到终态的任务 `task`。
+
+出参：无；`completionNotified` 保证同一任务至多触发一次回调。
+
+```cpp
 void TransportTaskManager::NotifyCompletion(const TransportTaskPtr& task);
 ```
 
@@ -683,6 +815,70 @@ flowchart LR
 | AT-SFMEA-07 | CQE、超时、取消或关闭并发导致重复完成 | 是 | 可能破坏上层一次完成语义 | 非 `PENDING` 子批次不重复完成；`completionNotified` CAS 保证任务至多回调一次 | 用线程栅栏并发触发 `Poll()`、`Cancel()` 和 `Shutdown()`，并统计回调次数 | 验证回调恰好一次，且资源只回收一次 |
 | AT-SFMEA-08 | 关闭时存在在途任务 | 是 | 在途任务可能遗留资源或不返回结果 | 停止新执行；等待配置超时；取消未完成任务并统一回收 | 通过 Fake Provider 延迟 CQE，在任务处于 `INFLIGHT` 时调用 `Shutdown()` | 验证任务以取消结果结束；关闭等待最多一个 `timeoutMs` 后进入取消收敛 |
 
-## 12. 一句话总结
+## 12. 开发自验证用例
+
+以下用例覆盖 Transport 自身的流控、下发、完成和资源闭环。推荐使用 `FakeTransProvider` 构造可控的发送结果与 CQE；KV 数据存取的一致性属于 ASU Client/Store 端到端验证范围，不应仅以 Transport 单测替代。
+
+### 12.1 I/O 流控拆分用例
+
+测试点：批处理请求是否按操作类型对应的单 SQE I/O 阈值完成拆分，并保持输入顺序。
+
+测试手段：构造 230 个 entry 的 `BATCH_STORE` 请求，配置 `asuBatchStoreIoNum` 为 110，调用 `IoScheduler::SplitForAsu()` 并检查各子批次 view。
+
+预期行为：生成 110、110、10 三个子批次；子批次合并后与原输入逐元素一致；拆分过程不分配 CID、buffer slot 或 channel。
+
+```cpp
+TEST(IoSchedulerTest, SplitEntryBatchPreservesOrderAndUsesViews)
+{
+    // 验证 230 个 entry 按阈值 110 拆分为 110/110/10，并保持原始顺序。
+}
+```
+
+### 12.2 请求下发与完成回调用例
+
+测试点：任务从 `Submit()` 到 Provider 下发、CQE 匹配、资源回收和上层回调的完整主路径。
+
+测试手段：使用 `FakeTransProvider` 初始化 Transport，提交一个包含可控 entry 的任务，并由 Fake Provider 写入与子批次 CID 匹配的成功 CQE；通过回调收集最终 `TaskResult`。
+
+预期行为：Provider 收到与子批次数量一致的 `SendIoBatch`；任务最终成功完成；逐 entry 状态正确；send/flag buffer slot 和 channel inflight 均回收为零；完成回调恰好一次。
+
+```cpp
+TEST(AsuTransportTest, SubmitSendPollAndNotifyCompletion)
+{
+    // 提交任务，注入匹配 CID 的成功 CQE，验证结果、资源归还和一次回调。
+}
+```
+
+### 12.3 局部发送失败隔离用例
+
+测试点：单个子批次发送失败时，是否只影响该子批次并保持其余子批次可完成。
+
+测试手段：构造能够拆分为多个子批次的批处理任务；令 `FakeTransProvider::Send()` 对其中一个 `SendIoBatch` 返回失败、其余批次返回成功并写入有效 CQE。
+
+预期行为：失败子批次标记对应错误并反馈连接健康；其余子批次正常轮询完成；最终任务返回部分失败；所有子批次资源仍恰好释放一次。
+
+```cpp
+TEST(AsuSubmitFlowTest, SendFailureOnlyCompletesAffectedSubBatch)
+{
+    // 注入单批次 Send 失败，验证局部失败、其余完成和资源闭环。
+}
+```
+
+### 12.4 超时、取消与关闭收敛用例
+
+测试点：CQE 缺失、显式取消和关闭同时作用于在途任务时，任务是否仅完成一次并完成资源回收。
+
+测试手段：令 `FakeTransProvider` 不写入 CQE，使任务保持 `PENDING`；分别触发 deadline 超时、`Cancel(taskId)` 和 `Shutdown()`，并用计数回调记录完成次数。
+
+预期行为：任务在对应终态被标记为超时或取消；回调恰好一次；TaskManager 不保留悬挂任务；所有 send/flag slot 和 inflight 均归还；关闭在配置的 `timeoutMs` 内完成收敛。
+
+```cpp
+TEST(AsuTransportTest, TimeoutCancelAndShutdownCompleteTaskOnce)
+{
+    // 在无 CQE 的在途任务上触发终态竞争，验证一次回调和资源回收。
+}
+```
+
+## 13. 一句话总结
 
 `IoScheduler` 依据 ASU 流控配置决定“大 I/O 请求应被整形为哪些受控 SQE 工作单元”，而 ASU Transport 决定“这些工作单元如何安全地变成一次可发送、可完成、可回收并最终只回调一次的异步 I/O”。
