@@ -817,7 +817,7 @@ flowchart LR
 
 ## 12. 开发自验证用例
 
-以下用例覆盖 Transport 自身的流控、下发、完成和资源闭环。推荐使用 `FakeTransProvider` 构造可控的发送结果与 CQE；KV 数据存取的一致性属于 ASU Client/Store 端到端验证范围，不应仅以 Transport 单测替代。
+以下用例覆盖 Transport 自身的流控、下发、完成和资源闭环。正常路径可使用 `FakeTransProvider`；需要注入发送失败、缺失 CQE 或并发时序的场景，使用可控的 Provider 测试桩或在 Fake Provider 上增加受控 Hook。KV 数据存取的一致性属于 ASU Client/Store 端到端验证范围，不应仅以 Transport 自验证替代。
 
 ### 12.1 I/O 流控拆分用例
 
@@ -827,12 +827,6 @@ flowchart LR
 
 预期行为：生成 110、110、10 三个子批次；子批次合并后与原输入逐元素一致；拆分过程不分配 CID、buffer slot 或 channel。
 
-```cpp
-TEST(IoSchedulerTest, SplitEntryBatchPreservesOrderAndUsesViews)
-{
-    // 验证 230 个 entry 按阈值 110 拆分为 110/110/10，并保持原始顺序。
-}
-```
 
 ### 12.2 请求下发与完成回调用例
 
@@ -842,42 +836,40 @@ TEST(IoSchedulerTest, SplitEntryBatchPreservesOrderAndUsesViews)
 
 预期行为：Provider 收到与子批次数量一致的 `SendIoBatch`；任务最终成功完成；逐 entry 状态正确；send/flag buffer slot 和 channel inflight 均回收为零；完成回调恰好一次。
 
-```cpp
-TEST(AsuTransportTest, SubmitSendPollAndNotifyCompletion)
-{
-    // 提交任务，注入匹配 CID 的成功 CQE，验证结果、资源归还和一次回调。
-}
-```
 
 ### 12.3 局部发送失败隔离用例
 
 测试点：单个子批次发送失败时，是否只影响该子批次并保持其余子批次可完成。
 
-测试手段：构造能够拆分为多个子批次的批处理任务；令 `FakeTransProvider::Send()` 对其中一个 `SendIoBatch` 返回失败、其余批次返回成功并写入有效 CQE。
+测试手段：构造能够拆分为多个子批次的批处理任务；使用可控 Provider 测试桩（或带失败注入 Hook 的 Fake Provider），令其中一个 `SendIoBatch` 返回失败，其余批次返回成功并产生有效 CQE。
 
 预期行为：失败子批次标记对应错误并反馈连接健康；其余子批次正常轮询完成；最终任务返回部分失败；所有子批次资源仍恰好释放一次。
 
-```cpp
-TEST(AsuSubmitFlowTest, SendFailureOnlyCompletesAffectedSubBatch)
-{
-    // 注入单批次 Send 失败，验证局部失败、其余完成和资源闭环。
-}
-```
 
 ### 12.4 超时、取消与关闭收敛用例
 
 测试点：CQE 缺失、显式取消和关闭同时作用于在途任务时，任务是否仅完成一次并完成资源回收。
 
-测试手段：令 `FakeTransProvider` 不写入 CQE，使任务保持 `PENDING`；分别触发 deadline 超时、`Cancel(taskId)` 和 `Shutdown()`，并用计数回调记录完成次数。
+测试手段：使用可控 Provider 测试桩（或带 CQE 控制 Hook 的 Fake Provider）不产生 CQE，使任务保持 `PENDING`；分别触发 deadline 超时、`Cancel(taskId)` 和 `Shutdown()`，并用计数回调记录完成次数。
 
 预期行为：任务在对应终态被标记为超时或取消；回调恰好一次；TaskManager 不保留悬挂任务；所有 send/flag slot 和 inflight 均归还；关闭在配置的 `timeoutMs` 内完成收敛。
 
-```cpp
-TEST(AsuTransportTest, TimeoutCancelAndShutdownCompleteTaskOnce)
-{
-    // 在无 CQE 的在途任务上触发终态竞争，验证一次回调和资源回收。
-}
-```
+### 12.5 端到端推理测试
+
+测试点：离线推理接入 ASU 后，PrefixCache 的写入、命中加载和资源卸载能否形成完整闭环。
+
+测试手段：使用配置了 ASU connector 的离线推理脚本运行一次 PrefixCache 构建请求，使 KV cache 写入 ASU；随后以相同前缀再次运行推理，触发 PrefixCache 从 ASU 加载；最后正常关闭推理实例并卸载 connector/ASU 资源。
+
+预期行为：首次请求成功完成并将可复用的 PrefixCache 写入 ASU；相同前缀的后续请求成功完成且产生 ASU cache hit/load；关闭后不遗留未完成任务、buffer 或连接资源，后续重新初始化仍可正常加载和卸载。
+
+### 12.6 kv-test 测试
+
+测试点：作为测试 ASU KV Client 路径的命令行工具，`kv-test` 能否加载 ASU 配置、初始化 Client/Transport，并正确执行 KV 数据的写入、读取、存在性查询和删除。
+
+测试手段：使用 `ucm/transport/kv/kv-test/asu_kv_test.conf`（或等价 ASU 配置）运行 `kv-test`；依次执行 `store --check`、`retrieve --check`、`exist` 和 `delete --check`，并记录命令退出状态与一致性检查结果。
+
+预期行为：各命令均成功完成；读取值与写入值一致；写入后 `exist` 返回存在，删除后再次读取或查询反映数据已删除；ASU KV Client 的配置加载、初始化、I/O 下发、完成回收和退出卸载均无错误。
+
 
 ## 13. 一句话总结
 

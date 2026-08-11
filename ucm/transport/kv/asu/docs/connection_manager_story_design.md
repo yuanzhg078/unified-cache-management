@@ -840,22 +840,15 @@ flowchart LR
 
 ## 12. 开发自验证用例
 
-以下用例用于开发阶段的单元自验证，推荐基于 `FakeTransProvider` 执行，不依赖真实 AICPU/AIV 设备或 ASU Store。异步恢复相关断言使用可控的 Fake Provider 或条件等待，避免用固定时长 `sleep` 作为判定条件。
+以下用例用于开发阶段自验证，推荐基于 `FakeTransProvider` 执行，不依赖真实 AICPU/AIV 设备或 ASU Store。异步恢复相关验证使用可控的 Fake Provider 或条件等待，避免用固定时长 `sleep` 作为判定条件。
 
 ### 12.1 连接组构建与连接选择用例
 
 测试点：多个 endpoint 的连接组构建，以及 `ACTIVE` channel 是否能够进入统一调度视图。
 
-测试手段：使用 `FakeTransProvider` 为两个 endpoint 分别创建指定数量的 handles；连续调用 `AddGroup()` 和 `SelectConnection()`，记录返回 channel 的 Group ID。
+测试手段：使用 `FakeTransProvider` 为两个 endpoint 分别创建指定数量的 handles；连续调用 `AddGroup()` 和 `SelectConnection()`，记录返回 channel 的 Group ID，并在每次选择后调用 `ReleaseInflight()`。
 
 预期行为：每个 endpoint 对应一个 `ConnectionGroup`；所有创建成功的 channel 都可被选择；Round Robin 策略能够跨 group 轮询，且每次成功选择都会将该 channel 的 `inflight` 增加 1。
-
-```cpp
-TEST(ConnectionManagerTest, AddGroupBuildsChannelsAndSelectsAcrossGroups)
-{
-    // 为两个 endpoint 创建 group，验证返回 channel 覆盖两个 group。
-}
-```
 
 ### 12.2 连接并发占用与释放用例
 
@@ -865,42 +858,21 @@ TEST(ConnectionManagerTest, AddGroupBuildsChannelsAndSelectsAcrossGroups)
 
 预期行为：成功选择后 `inflight` 从 0 增至 1；释放后恢复为 0；重复释放不会使计数变为负数；当所有 channel 的 `inflight` 均达到 256 时，`SelectConnection()` 返回 `nullptr`。
 
-```cpp
-TEST(ConnectionManagerTest, SelectAndReleaseInflightAreSymmetric)
-{
-    // SelectConnection() 后校验 inflight +1，ReleaseInflight() 后校验恢复。
-}
-```
-
 ### 12.3 连接失败隔离与恢复用例
 
 测试点：连续连接失败达到阈值后，故障 channel 的隔离和替代连接恢复。
 
 测试手段：以可控 `FakeTransProvider` 创建初始连接并启动恢复线程；对选中的 channel 连续调用 `ReportFailure()` 至 `maxErrorCount_`，令 Fake Provider 在恢复阶段返回新的有效 handle。
 
-预期行为：达到阈值前 channel 保持 `ACTIVE`；达到阈值后仅一次转换为 `DRAINING`，后续 `SelectConnection()` 不再返回该 channel；恢复成功后，同一 Group 中出现新的 `ACTIVE` channel 并可被选择，旧 channel 在其最后一个 `shared_ptr` 释放前仍然存活。
-
-```cpp
-TEST(ConnectionManagerTest, ReportFailureDrainsAndRecoversChannel)
-{
-    // 触发阈值，等待 Fake Provider 完成替代建链，再验证新旧 channel 生命周期。
-}
-```
+预期行为：达到阈值前 channel 保持 `ACTIVE`；达到阈值后仅一次转换为 `DRAINING`，后续 `SelectConnection()` 不再返回该 channel；恢复成功后，同一 Group 中出现新的 `ACTIVE` channel 并可被选择；恢复期间已有在途引用不会被提前释放，且不发生悬挂引用或非法访问。
 
 ### 12.4 连接池关闭用例
 
 测试点：关闭过程的资源回收、拒绝后续调度以及幂等性。
 
-测试手段：创建连接组并启动恢复线程后调用 `Shutdown()`；再次调用 `Shutdown()`，并在两次关闭后尝试 `SelectConnection()` 和 `AddGroup()`。
+测试手段：创建连接组并启动恢复线程后调用 `Shutdown()`；在首次关闭后尝试 `SelectConnection()` 和 `AddGroup()`；再次调用 `Shutdown()`，并再次验证两项调用结果。
 
 预期行为：首次关闭成功停止恢复线程并清理 Manager 持有的连接结构；关闭后 `SelectConnection()` 返回 `nullptr`，`AddGroup()` 返回失败；重复关闭不重复删除 Provider handle，且仍返回成功状态。
-
-```cpp
-TEST(ConnectionManagerTest, ShutdownReleasesResourcesAndIsIdempotent)
-{
-    // 验证关闭后的拒绝行为，以及 Fake Provider 的 DeleteConnections 调用次数。
-}
-```
 
 ## 13. 一句话总结
 
