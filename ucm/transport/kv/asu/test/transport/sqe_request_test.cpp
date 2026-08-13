@@ -240,7 +240,7 @@ TEST_F(SqeRequestTest, SubmitBatchStoreAllocatesFlagBufferAndBuildsRequest)
     transport_->nextRequestCid_.store(41, std::memory_order_relaxed);
     BindEntries(*transport_, entries, 0xABCD0000);
 
-    const auto status = transport_->taskExecutor_->SubmitEntrySubBatchRequest(
+    const auto status = transport_->taskExecutor_->BuildEntrySubBatchRequest(
         TransportOpType::BATCH_STORE, subBatch, subBatchContext);
 
     EXPECT_TRUE(status.ok()) << status.message;
@@ -295,7 +295,7 @@ TEST_F(SqeRequestTest, SubmitBatchStorePacksSqeIntoDeviceSendBuffer)
     };
     TransportSubBatchContext subBatchContext;
 
-    const auto status = deviceTransport.taskExecutor_->SubmitEntrySubBatchRequest(
+    const auto status = deviceTransport.taskExecutor_->BuildEntrySubBatchRequest(
         TransportOpType::BATCH_STORE, subBatch, subBatchContext);
 
     ASSERT_TRUE(status.ok()) << status.message;
@@ -322,7 +322,7 @@ TEST_F(SqeRequestTest, SubmitBatchRetrieveUsesRetrieveOpcodeAndRequest)
     transport_->nextRequestCid_.store(9, std::memory_order_relaxed);
     BindEntries(*transport_, entries, 0x76540000);
 
-    const auto status = transport_->taskExecutor_->SubmitEntrySubBatchRequest(
+    const auto status = transport_->taskExecutor_->BuildEntrySubBatchRequest(
         TransportOpType::BATCH_LOAD, subBatch, subBatchContext);
 
     EXPECT_TRUE(status.ok()) << status.message;
@@ -346,7 +346,7 @@ TEST_F(SqeRequestTest, SubmitBatchStoreUsesDefaultMrKeyForUnregisteredEntryBuffe
     };
     TransportSubBatchContext subBatchContext;
 
-    const auto status = transport_->taskExecutor_->SubmitEntrySubBatchRequest(
+    const auto status = transport_->taskExecutor_->BuildEntrySubBatchRequest(
         TransportOpType::BATCH_STORE, subBatch, subBatchContext);
 
     EXPECT_TRUE(status.ok()) << status.message;
@@ -443,7 +443,7 @@ TEST_F(SqeRequestTest, AllocationFailureMarksWholeSubBatchFailed)
     CreateTaskExecutor(uninitializedFlagTransport);
     BindEntries(uninitializedFlagTransport, entries, 0x45670000);
 
-    const auto status = uninitializedFlagTransport.taskExecutor_->SubmitEntrySubBatchRequest(
+    const auto status = uninitializedFlagTransport.taskExecutor_->BuildEntrySubBatchRequest(
         TransportOpType::BATCH_STORE, subBatch, subBatchContext);
 
     EXPECT_EQ(status.code, StatusCode::NOT_INITIALIZED);
