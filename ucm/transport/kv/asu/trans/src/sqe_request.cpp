@@ -113,12 +113,11 @@ Status AllocateSubBatchFlagBuffer(KvOpcode opcode, std::size_t batchNum,
     return Status::OK();
 }
 
-Status SetSubBatchBuildFailed(TransportSubBatchContext& subBatchContext, const Status& status)
+void SetSubBatchBuildFailed(TransportSubBatchContext& subBatchContext, const Status& status)
 {
     subBatchContext.state = TransportSubBatchState::COMPLETED;
     subBatchContext.status = status;
     std::fill(subBatchContext.entryStatus.begin(), subBatchContext.entryStatus.end(), status);
-    return status;
 }
 
 struct SubBatchRequestSource {
@@ -145,7 +144,10 @@ Status PrepareSubBatchRequest(TransportOpType opType, KvOpcode opcode, std::uint
     subBatchContext.opType = opType;
     subBatchContext.cid = cid;
     auto status = AllocateSubBatchFlagBuffer(opcode, batchNum, flagBufferManager, subBatchContext);
-    if (!status.ok()) { return SetSubBatchBuildFailed(subBatchContext, status); }
+    if (!status.ok()) {
+        SetSubBatchBuildFailed(subBatchContext, status);
+        return status;
+    }
     return Status::OK();
 }
 
@@ -161,7 +163,8 @@ Status PackSubBatchRequest(ProtocolManager& protocolManager, BufferManager& send
             "message={}",
             static_cast<int>(opcode), subBatchContext.cid, packedSize,
             static_cast<int>(status.code), status.message);
-        return SetSubBatchBuildFailed(subBatchContext, status);
+        SetSubBatchBuildFailed(subBatchContext, status);
+        return status;
     }
 
     if (subBatchContext.sendSge.memory_type == MemoryType::ASCEND_DEVICE) {
@@ -185,7 +188,8 @@ Status PackSubBatchRequest(ProtocolManager& protocolManager, BufferManager& send
         UC_ERROR("Pack sub-batch request failed opcode={} cid={} code={} message={}",
                  static_cast<int>(opcode), subBatchContext.cid, static_cast<int>(status.code),
                  status.message);
-        return SetSubBatchBuildFailed(subBatchContext, status);
+        SetSubBatchBuildFailed(subBatchContext, status);
+        return status;
     }
 
     subBatchContext.status = status;
@@ -333,24 +337,25 @@ std::unique_ptr<SqeRequest> BuildSqeRequest(
 
 }  // namespace
 
-Status TransportTaskExecutor::SubmitEntrySubBatchRequest(
+Status TransportTaskExecutor::BuildEntrySubBatchRequest(
     TransportOpType opType, const IoScheduler::ScheduledIoBatch& subBatch,
     TransportSubBatchContext& subBatchContext)
 {
     const auto source = SubBatchRequestSource::FromEntries(subBatch.entries);
     subBatchContext.entryStatus.assign(subBatch.entries.size, Status::OK());
     const auto opcode = ToKvOpcode(opType);
-    const auto cid = AllocateRequestCid();
-    subBatchContext.opType = opType;
-    subBatchContext.cid = cid;
 
     std::vector<std::uint32_t> mrKeys;
     {
         std::lock_guard<std::mutex> lock(registeredRegionsMu_);
         auto resolveStatus = ResolveSqeMrKeys(subBatch.entries, registeredRegions_, mrKeys);
-        if (!resolveStatus.ok()) { return SetSubBatchBuildFailed(subBatchContext, resolveStatus); }
+        if (!resolveStatus.ok()) {
+            SetSubBatchBuildFailed(subBatchContext, resolveStatus);
+            return resolveStatus;
+        }
     }
 
+    const auto cid = AllocateRequestCid();
     auto status = PrepareSubBatchRequest(opType, opcode, cid, subBatch.entries.size,
                                          flagBufferManager_, subBatchContext);
     if (!status.ok()) { return status; }
