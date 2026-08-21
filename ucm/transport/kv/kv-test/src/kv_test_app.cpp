@@ -1,14 +1,17 @@
 ﻿#include "kv_test/kv_test_app.h"
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 #include "kv_test/asu_runtime_proxy.h"
 #include "kv_test/kv_test_config_helpers.h"
 #include "kv_test/payload_buffer_runtime.h"
+#include "asu_metrics/metrics.h"
 
 namespace UC::KVTest {
 
@@ -20,6 +23,56 @@ constexpr const char* kAnsiGreen = "\033[32m";
 constexpr const char* kAnsiRed = "\033[31m";
 constexpr const char* kAnsiReset = "\033[0m";
 int ToExitCode(const Status& status) { return status.Ok() ? kExitSuccess : status.code; }
+
+class MetricsRuntime {
+public:
+    ~MetricsRuntime() { Stop(); }
+
+    Status Start(const MetricsServerConfig& config)
+    {
+        if (!config.enabled) { return Status::Success(); }
+
+        UC::ASU::Metrics::StandaloneMetricsConfig backendConfig;
+        backendConfig.definitionPath = config.definitionPath;
+        backendConfig.listenAddress = config.listenAddress;
+        backendConfig.port = config.port;
+        backendConfig.metricsPath = config.path;
+        backendConfig.healthPath = config.healthPath;
+        backendConfig.constantLabels = {
+            {"model_name", config.modelName},
+            {"source",     config.source   },
+            {"worker_id",  config.workerId},
+        };
+
+        std::string error;
+        auto backend = UC::ASU::Metrics::CreateStandaloneMetricsBackend(
+            std::move(backendConfig));
+        if (!UC::ASU::Metrics::Initialize(std::move(backend), &error)) {
+            return Status::Error(kExitInvalidArgument,
+                                 "failed to start ASU metrics exporter: " + error);
+        }
+        started_ = true;
+        shutdownGraceMs_ = config.shutdownGraceMs;
+        std::cout << "metrics: http://" << config.listenAddress << ':' << config.port
+                  << config.path << '\n';
+        return Status::Success();
+    }
+
+    void Stop()
+    {
+        if (!started_) { return; }
+        UC::ASU::Metrics::Flush();
+        if (shutdownGraceMs_ != 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(shutdownGraceMs_));
+        }
+        UC::ASU::Metrics::Shutdown();
+        started_ = false;
+    }
+
+private:
+    bool started_{false};
+    std::uint32_t shutdownGraceMs_{0};
+};
 
 std::filesystem::path PowerCycleMetadataPath(const KvTestConfig& config)
 {
@@ -401,8 +454,21 @@ int KvTestApp::Run(int argc, char** argv)
         std::cout << "config: key_prefix=" << config.keyPrefix << " count=" << config.count
                   << " value_size=" << config.valueSize
                   << " timeout_ms=" << config.asuClientConfig.defaultWaitTimeoutMs
-                  << " output=" << config.output.path << '\n';
+                  << " output=" << config.output.path
+                  << " metrics_enabled=" << (config.metrics.enabled ? "true" : "false");
+        if (config.metrics.enabled) {
+            std::cout << " metrics_endpoint=http://" << config.metrics.listenAddress << ':'
+                      << config.metrics.port << config.metrics.path;
+        }
+        std::cout << '\n';
         return kExitSuccess;
+    }
+
+    MetricsRuntime metricsRuntime;
+    status = metricsRuntime.Start(config.metrics);
+    if (!status.Ok()) {
+        PrintFailure(status);
+        return ToExitCode(status);
     }
 
     PayloadBufferAclRuntime payloadBufferAclRuntime;
@@ -431,6 +497,8 @@ int KvTestApp::Run(int argc, char** argv)
 
     auto shutdownStatus = clientRunner.Shutdown();
     if (status.Ok() && !shutdownStatus.Ok()) { status = shutdownStatus; }
+
+    metricsRuntime.Stop();
 
     result.status = status;
     auto writeStatus = resultWriter_.WriteSummary(effectiveOptions, result);

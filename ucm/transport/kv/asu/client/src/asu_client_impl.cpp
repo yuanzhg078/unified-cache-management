@@ -23,16 +23,62 @@
  * */
 #include "asu_client_impl.h"
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <thread>
 #include <utility>
 #include "asu_transport/types.h"
+#include "asu_metrics/metric_names.h"
+#include "asu_metrics/metrics.h"
 #include "client_config_parser.h"
 #include "client_router_config.h"
 #include "kv_common/router.h"
 #include "logger/logger.h"
 
 namespace UC::ASU {
+
+namespace {
+
+struct SubmitMetricNames {
+    std::string_view requests;
+    std::string_view entries;
+    std::string_view errors;
+    std::string_view duration;
+};
+
+SubmitMetricNames GetSubmitMetricNames(AsuOpType opType)
+{
+    using namespace Metrics::Names;
+    switch (opType) {
+        case AsuOpType::QUERY:
+            return {QueryRequests, QueryEntries, QueryErrors, QuerySubmitDuration};
+        case AsuOpType::LOAD: return {LoadRequests, LoadEntries, LoadErrors, LoadSubmitDuration};
+        case AsuOpType::STORE:
+            return {StoreRequests, StoreEntries, StoreErrors, StoreSubmitDuration};
+        case AsuOpType::BATCH_LOAD:
+            return {BatchLoadRequests, BatchLoadEntries, BatchLoadErrors, BatchLoadSubmitDuration};
+        case AsuOpType::BATCH_STORE:
+            return {BatchStoreRequests, BatchStoreEntries, BatchStoreErrors,
+                    BatchStoreSubmitDuration};
+        case AsuOpType::DELETE:
+            return {DeleteRequests, DeleteEntries, DeleteErrors, DeleteSubmitDuration};
+        default: return {};
+    }
+}
+
+void RecordSubmit(AsuOpType opType, std::size_t entryCount, const Status& status,
+                  std::chrono::steady_clock::time_point begin)
+{
+    const auto names = GetSubmitMetricNames(opType);
+    if (names.requests.empty()) { return; }
+    Metrics::Add(names.requests);
+    Metrics::Add(names.entries, static_cast<double>(entryCount));
+    if (!status.ok()) { Metrics::Add(names.errors); }
+    const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - begin);
+    Metrics::Observe(names.duration, elapsed.count());
+}
+
+}  // namespace
 
 constexpr std::uint32_t kMaxShutdownDrainAttempts = 64;
 
@@ -179,42 +225,64 @@ Status AsuClientImpl::Shutdown()
 
 Status AsuClientImpl::QueryAsync(const std::vector<CacheKey>& keys, TaskId& taskId)
 {
+    const auto begin = std::chrono::steady_clock::now();
     auto status = SubmitAsync(AsuOpType::QUERY, keys, taskId);
+    RecordSubmit(AsuOpType::QUERY, keys.size(), status, begin);
     if (IsRefreshNeeded(status)) { RequestBackgroundRefresh(); }
     return status;
 }
 
 Status AsuClientImpl::LoadAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::LOAD, entries, taskId);
+    const auto begin = std::chrono::steady_clock::now();
+    auto status = SubmitAsync(AsuOpType::LOAD, entries, taskId);
+    RecordSubmit(AsuOpType::LOAD, entries.size(), status, begin);
+    return status;
 }
 
 Status AsuClientImpl::StoreAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::STORE, entries, taskId);
+    const auto begin = std::chrono::steady_clock::now();
+    auto status = SubmitAsync(AsuOpType::STORE, entries, taskId);
+    RecordSubmit(AsuOpType::STORE, entries.size(), status, begin);
+    return status;
 }
 
 Status AsuClientImpl::BatchLoadAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::BATCH_LOAD, entries, taskId);
+    const auto begin = std::chrono::steady_clock::now();
+    auto status = SubmitAsync(AsuOpType::BATCH_LOAD, entries, taskId);
+    RecordSubmit(AsuOpType::BATCH_LOAD, entries.size(), status, begin);
+    return status;
 }
 
 Status AsuClientImpl::BatchStoreAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::BATCH_STORE, entries, taskId);
+    const auto begin = std::chrono::steady_clock::now();
+    auto status = SubmitAsync(AsuOpType::BATCH_STORE, entries, taskId);
+    RecordSubmit(AsuOpType::BATCH_STORE, entries.size(), status, begin);
+    return status;
 }
 
 Status AsuClientImpl::DeleteAsync(const std::vector<CacheKey>& keys, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::DELETE, keys, taskId);
+    const auto begin = std::chrono::steady_clock::now();
+    auto status = SubmitAsync(AsuOpType::DELETE, keys, taskId);
+    RecordSubmit(AsuOpType::DELETE, keys.size(), status, begin);
+    return status;
 }
 
 bool AsuClientImpl::Check(TaskId taskId) { return taskManager_.Check(taskId); }
 
 Status AsuClientImpl::Wait(TaskId taskId, std::uint64_t timeoutMs, TaskResult& result)
 {
+    const auto begin = std::chrono::steady_clock::now();
+    Metrics::Add(Metrics::Names::WaitRequests);
     const auto waitMs = timeoutMs == 0 ? config_.defaultWaitTimeoutMs : timeoutMs;
     auto status = taskManager_.Wait(taskId, waitMs, result);
+    if (!status.ok() || !result.status.ok()) { Metrics::Add(Metrics::Names::WaitErrors); }
+    const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - begin);
+    Metrics::Observe(Metrics::Names::WaitDuration, elapsed.count());
     if (status.code == StatusCode::TASK_NOT_FOUND) { return status; }
     if (viewServer_ != nullptr &&
         (viewServer_->ShouldRefreshView(status) || viewServer_->ShouldRefreshView(result))) {
