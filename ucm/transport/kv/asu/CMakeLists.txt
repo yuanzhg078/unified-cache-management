@@ -45,6 +45,8 @@ option(BUILD_UCM_ASU_PROVIDER_AICPU "Build ASU AICPU trans provider" OFF)
 option(BUILD_UCM_ASU_PROVIDER_FAKE "Build ASU fake trans provider" ON)
 option(BUILD_UCM_ASU_PROVIDER_AIV "Build ASU AIV trans provider (requires external libumc.a)" OFF)
 
+add_subdirectory(metrics)
+
 add_library(asu_ascend_deps INTERFACE)
 target_include_directories(asu_ascend_deps INTERFACE ${ASU_ASCEND_INCLUDE_DIR})
 target_link_libraries(asu_ascend_deps INTERFACE ${ASU_ASCENDCL_LIB})
@@ -74,7 +76,7 @@ target_include_directories(asu_transport
 target_compile_definitions(asu_transport PRIVATE SPDLOG_FMT_EXTERNAL)
 target_link_libraries(asu_transport
     PUBLIC
-        pthread fmt spdlog zlibstatic
+        pthread fmt spdlog zlibstatic asu_metrics
     PRIVATE
         asu_ascend_deps
 )
@@ -125,6 +127,7 @@ target_include_directories(asu_client
         ${UCM_ROOT_DIR}/ucm/shared/infra
 )
 target_link_libraries(asu_client PUBLIC asu_transport router pthread)
+target_link_libraries(asu_client PRIVATE asu_metrics)
 target_compile_definitions(asu_client PRIVATE SPDLOG_FMT_EXTERNAL)
 
 file(RELATIVE_PATH INSTALL_REL_PATH ${UCM_ROOT_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
@@ -138,6 +141,7 @@ if(BUILD_UNIT_TESTS)
     include(GoogleTest)
     file(GLOB ASU_TEST_SOURCE_FILES CONFIGURE_DEPENDS
         test/client/*.cpp
+        test/metrics/*.cpp
         test/transport/*.cpp
     )
     add_executable(asu.test ${ASU_TEST_SOURCE_FILES})
@@ -150,6 +154,7 @@ if(BUILD_UNIT_TESTS)
     )
     target_link_libraries(asu.test PRIVATE
         asu_client
+        asu_metrics
         asu_ascend_deps
         gtest_main gtest
     )

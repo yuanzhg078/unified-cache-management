@@ -48,6 +48,20 @@ std::uint32_t ParseUint32(const std::string& value)
     return static_cast<std::uint32_t>(result);
 }
 
+bool ParseBool(const std::string& value)
+{
+    const auto normalized = NormalizeKey(Trim(value));
+    if (normalized == "true" || normalized == "1" || normalized == "yes" ||
+        normalized == "on") {
+        return true;
+    }
+    if (normalized == "false" || normalized == "0" || normalized == "no" ||
+        normalized == "off") {
+        return false;
+    }
+    throw std::invalid_argument("invalid boolean");
+}
+
 std::unordered_map<std::string, std::string> LoadKeyValueFile(const std::string& configPath,
                                                               Status& status)
 {
@@ -100,6 +114,15 @@ bool GetUint32Value(const std::unordered_map<std::string, std::string>& values,
     const auto iter = values.find(NormalizeKey(key));
     if (iter == values.end()) { return false; }
     result = ParseUint32(iter->second);
+    return true;
+}
+
+bool GetBoolValue(const std::unordered_map<std::string, std::string>& values,
+                  const std::string& key, bool& result)
+{
+    const auto iter = values.find(NormalizeKey(key));
+    if (iter == values.end()) { return false; }
+    result = ParseBool(iter->second);
     return true;
 }
 
@@ -165,6 +188,7 @@ Status KvTestConfigLoader::Load(const std::string& configPath, KvTestConfig& con
     config.output = OutputConfig{};
     config.fakeBackend = KvTestFakeBackendConfig{};
     config.asuRuntime = AsuRuntimeLibraryConfig{};
+    config.metrics = MetricsServerConfig{};
     config.keyPrefix.clear();
     config.seed = 0;
     config.valueSize = 0;
@@ -220,6 +244,42 @@ Status KvTestConfigLoader::Load(const std::string& configPath, KvTestConfig& con
         GetStringAny(values, {"output.path"}, config.output.path);
         GetUint64Any(values, {"output.realtime_file_max_bytes"},
                      config.output.realtimeFileMaxBytes);
+
+        GetBoolValue(values, "metrics.enabled", config.metrics.enabled);
+        GetStringAny(values, {"metrics.config_path", "metrics.definition_path"},
+                     config.metrics.definitionPath);
+        GetStringAny(values, {"metrics.listen_address"}, config.metrics.listenAddress);
+        GetStringAny(values, {"metrics.path"}, config.metrics.path);
+        GetStringAny(values, {"metrics.health_path"}, config.metrics.healthPath);
+        GetStringAny(values, {"metrics.source"}, config.metrics.source);
+        GetStringAny(values, {"metrics.model_name"}, config.metrics.modelName);
+        GetStringAny(values, {"metrics.worker_id"}, config.metrics.workerId);
+        GetUint32Any(values, {"metrics.aggregation_interval_ms"},
+                     config.metrics.aggregationIntervalMs);
+        GetUint32Any(values, {"metrics.shutdown_grace_ms"},
+                     config.metrics.shutdownGraceMs);
+
+        std::uint32_t metricsPort = config.metrics.port;
+        if (GetUint32Any(values, {"metrics.port"}, metricsPort)) {
+            if (metricsPort == 0 || metricsPort > std::numeric_limits<std::uint16_t>::max()) {
+                throw std::out_of_range("metrics.port must be in [1, 65535]");
+            }
+            config.metrics.port = static_cast<std::uint16_t>(metricsPort);
+        }
+        if (config.metrics.enabled && config.metrics.listenAddress.empty()) {
+            throw std::invalid_argument("metrics.listen_address must not be empty");
+        }
+        if (config.metrics.enabled && config.metrics.aggregationIntervalMs == 0) {
+            throw std::invalid_argument("metrics.aggregation_interval_ms must be greater than 0");
+        }
+        if (config.metrics.enabled &&
+            (config.metrics.path.empty() || config.metrics.path.front() != '/')) {
+            throw std::invalid_argument("metrics.path must start with '/'");
+        }
+        if (config.metrics.enabled &&
+            (config.metrics.healthPath.empty() || config.metrics.healthPath.front() != '/')) {
+            throw std::invalid_argument("metrics.health_path must start with '/'");
+        }
 
         std::uint64_t timeoutMs{0};
         if (GetUint64Any(values, {"connection.timeout_ms"}, timeoutMs)) {
