@@ -9,18 +9,111 @@ metric_prefix: "ucm:"
 histogram_max_length: 10000  # Maximum length of the vector for each histogram metric
 
 # Counter metrics configuration
-# counter:
-#   - name: "received_requests"
-#     documentation: "Total number of requests sent to ucm"
+counter:
+  - name: "asu_client_query_requests_total"
+    documentation: "Total ASU client query submissions"
+  - name: "asu_client_query_entries_total"
+    documentation: "Total keys submitted to ASU client query"
+  - name: "asu_client_query_errors_total"
+    documentation: "Total failed ASU client query submissions"
+  - name: "asu_client_load_requests_total"
+    documentation: "Total ASU client load submissions"
+  - name: "asu_client_load_entries_total"
+    documentation: "Total entries submitted to ASU client load"
+  - name: "asu_client_load_errors_total"
+    documentation: "Total failed ASU client load submissions"
+  - name: "asu_client_store_requests_total"
+    documentation: "Total ASU client store submissions"
+  - name: "asu_client_store_entries_total"
+    documentation: "Total entries submitted to ASU client store"
+  - name: "asu_client_store_errors_total"
+    documentation: "Total failed ASU client store submissions"
+  - name: "asu_client_batch_load_requests_total"
+    documentation: "Total ASU client batch-load submissions"
+  - name: "asu_client_batch_load_entries_total"
+    documentation: "Total entries submitted to ASU client batch-load"
+  - name: "asu_client_batch_load_errors_total"
+    documentation: "Total failed ASU client batch-load submissions"
+  - name: "asu_client_batch_store_requests_total"
+    documentation: "Total ASU client batch-store submissions"
+  - name: "asu_client_batch_store_entries_total"
+    documentation: "Total entries submitted to ASU client batch-store"
+  - name: "asu_client_batch_store_errors_total"
+    documentation: "Total failed ASU client batch-store submissions"
+  - name: "asu_client_delete_requests_total"
+    documentation: "Total ASU client delete submissions"
+  - name: "asu_client_delete_entries_total"
+    documentation: "Total keys submitted to ASU client delete"
+  - name: "asu_client_delete_errors_total"
+    documentation: "Total failed ASU client delete submissions"
+  - name: "asu_client_wait_requests_total"
+    documentation: "Total ASU client wait calls"
+  - name: "asu_client_wait_errors_total"
+    documentation: "Total failed ASU client wait calls"
+  - name: "asu_metrics_exporter_http_requests_total"
+    documentation: "Total HTTP requests served by the ASU metrics endpoint"
 
 # Gauge metrics configuration
-# gauge:
-#   - name: "lookup_hit_rate"
-#     documentation: "Hit rate of ucm lookup requests since last log"
-#     multiprocess_mode: "livemostrecent"
+gauge:
+  - name: "asu_metrics_exporter_up"
+    documentation: "Whether the ASU standalone metrics exporter is running"
 
 # Histogram metrics configuration
 histogram:
+  - name: "asu_client_query_submit_duration_seconds"
+    documentation: "ASU client query submission duration in seconds"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_client_load_submit_duration_seconds"
+    documentation: "ASU client load submission duration in seconds"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_client_store_submit_duration_seconds"
+    documentation: "ASU client store submission duration in seconds"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_client_batch_load_submit_duration_seconds"
+    documentation: "ASU client batch-load submission duration in seconds"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_client_batch_store_submit_duration_seconds"
+    documentation: "ASU client batch-store submission duration in seconds"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_client_delete_submit_duration_seconds"
+    documentation: "ASU client delete submission duration in seconds"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_client_wait_duration_seconds"
+    documentation: "ASU client wait duration in seconds"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_client_task_enqueue_duration_seconds"
+    documentation: "ASU client task duration from API entry until client queue enqueue"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_client_task_queue_duration_seconds"
+    documentation: "ASU client task queue wait duration"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_client_task_process_duration_seconds"
+    documentation: "ASU client worker processing duration until all transport tasks are submitted"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_client_task_pre_send_duration_seconds"
+    documentation: "ASU client task duration from enqueue until all transport tasks reach provider Send"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_client_task_send_duration_seconds"
+    documentation: "ASU client task duration from enqueue until all transport Send calls return"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_client_task_duration_seconds"
+    documentation: "ASU client task end-to-end duration from enqueue to completion"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_transport_task_pre_send_duration_seconds"
+    documentation: "ASU transport task duration from client dispatch until immediately before Send"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_transport_task_queue_duration_seconds"
+    documentation: "ASU transport task queue wait duration"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_transport_task_process_duration_seconds"
+    documentation: "ASU transport executor processing duration until immediately before Send"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_transport_task_send_duration_seconds"
+    documentation: "ASU transport task duration from client dispatch until Send returns"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_transport_task_completion_duration_seconds"
+    documentation: "ASU transport task duration from Send return until completion callback"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
   - name: "load_requests_num"
     documentation: "Number of requests loaded from ucm"
     buckets: [1, 5, 10, 20, 50, 100, 200, 500, 1000]

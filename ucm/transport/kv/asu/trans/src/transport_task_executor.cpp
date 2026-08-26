@@ -28,6 +28,7 @@
 #include <string>
 #include <utility>
 #include "asu_response_status.h"
+#include "asu_metrics/metrics.h"
 #include "connection_internal.h"
 #include "logger.h"
 
@@ -300,6 +301,7 @@ bool TransportTaskExecutor::Execute(const TransportTaskPtr& task)
                                              std::memory_order_acq_rel)) {
         return false;
     }
+    task->processingStartedAt = std::chrono::steady_clock::now();
 
     std::vector<TransportSubBatchContext> subBatchContexts;
     auto status = PrepareTaskSubBatches(*task, subBatchContexts);
@@ -313,8 +315,15 @@ bool TransportTaskExecutor::Execute(const TransportTaskPtr& task)
         UC_ERROR("Abort transport task before send task_id={} code={} message={}", task->taskId,
                  static_cast<int>(status.code), status.message);
     } else {
-        SendSubBatchBuffers(subBatchContexts, ioBatches);
+        SendSubBatchBuffers(*task, subBatchContexts, ioBatches);
     }
+    task->sendCompletedAt = std::chrono::steady_clock::now();
+    task->sendReturned.store(true, std::memory_order_release);
+    const Metrics::BuiltinMetricUpdate sendUpdate{
+        Metrics::MetricId::TransportTaskSendDuration,
+        std::chrono::duration<double>(task->sendCompletedAt - task->submittedAt).count()};
+    Metrics::UpdateBuiltinBatch(&sendUpdate, 1);
+    task->NotifySendComplete();
 
     bool done = false;
     {

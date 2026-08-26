@@ -17,8 +17,8 @@ artifacts and loaded by `kv-test` at runtime with `dlopen`.
 `kv-test` is included only when ASU support is enabled:
 
 ```bash
-cmake -S . -B build-kv-test -DBUILD_UCM_ASU=ON -DBUILD_UCM_STORE=OFF -DBUILD_UNIT_TESTS=OFF -DRUNTIME_ENVIRONMENT=ascend -DBUILD_UCM_ASU_PROVIDER_FAKE=ON
-cmake --build build-kv-test --target asu_transport asu_client
+cmake -S . -B build-kv-test -DBUILD_UCM_ASU=ON -DBUILD_UCM_STORE=OFF -DBUILD_UNIT_TESTS=OFF -DRUNTIME_ENVIRONMENT=simu -DBUILD_UCM_ASU_PROVIDER_FAKE=ON
+cmake --build build-kv-test --target asu_metrics asu_transport asu_client
 cmake --build build-kv-test --target kv-test
 ```
 
@@ -212,6 +212,20 @@ bench.batch_size=16
 
 output.path=./kv-test-output
 output.realtime_file_max_bytes=104857600
+
+# Optional ASU-owned Prometheus endpoint. It does not require vLLM or the UCM
+# Python metrics exporter.
+metrics.enabled=true
+metrics.config_path=./examples/metrics/metrics_configs.yaml
+metrics.listen_address=127.0.0.1
+metrics.port=9108
+metrics.path=/metrics
+metrics.health_path=/health
+metrics.source=kv-test
+metrics.model_name=standalone
+metrics.worker_id=asu-0
+metrics.aggregation_interval_ms=500
+metrics.shutdown_grace_ms=0
 ```
 
 ### ASU client fields
@@ -257,6 +271,22 @@ These fields are parsed by `kv-test` itself:
 | `kv.value_size` | Value size for normal commands. |
 | `kv.count` | Default count for count-based generation. |
 | `limits.memory_max_bytes` | Maximum value payload bytes held by kv-test. For normal commands this limits generated value bytes. For `bench`, this limits the reusable buffer pool. Default is 4 GiB. |
+| `metrics.enabled` | Starts the ASU standalone Prometheus HTTP exporter when `true`. Default is `false`. |
+| `metrics.config_path` | Optional path to the UCM-compatible metrics YAML. ASU built-in descriptors are always available; matching YAML entries override their help/type/buckets. |
+| `metrics.listen_address` | Exporter bind address. Defaults to `127.0.0.1`. |
+| `metrics.port` | Exporter TCP port. Defaults to `9108`. |
+| `metrics.path` | Prometheus endpoint path. Defaults to `/metrics`. |
+| `metrics.health_path` | Exporter health endpoint. Defaults to `/health`, matching vLLM. |
+| `metrics.source` | Constant Prometheus `source` label. Defaults to `kv-test`. |
+| `metrics.model_name` | Compatibility label used by existing UCM dashboards. Defaults to `standalone`. |
+| `metrics.worker_id` | Stable worker label. Defaults to `asu-0`. |
+| `metrics.aggregation_interval_ms` | Interval for draining each thread's metrics buffer into the Prometheus snapshot. Defaults to `500`; use `Flush()` before process shutdown when final data must be visible immediately. |
+| `metrics.shutdown_grace_ms` | Keeps the endpoint alive after a command finishes so Prometheus can scrape final values. Use `0` for long-running bench commands. |
+
+The standalone loader intentionally supports the subset used by
+`metrics_configs.yaml`: top-level `metric_prefix`, `counter`, `gauge`, and
+`histogram` lists with `name`, `documentation`, and inline numeric `buckets`.
+YAML anchors, multiline values, and arbitrary nested schemas are not supported.
 | `bench.io_size` | Bench value size for one key. Must not exceed the protocol 24-bit length limit `0xFFFFFF`. |
 | `bench.concurrency` | Number of benchmark operations launched concurrently in one wave. |
 | `bench.duration_sec` | Measured benchmark duration. Must be greater than zero. |
@@ -547,6 +577,32 @@ kv-test: failed: <message> (exit_code=<code>)
 
 Additional terminal summaries are printed for `exist`, enabled consistency
 checks, and `bench`.
+
+## Standalone ASU metrics
+
+With `metrics.enabled=true`, `kv-test` installs the standalone
+`UC::ASU::Metrics` backend before it creates the ASU client. The executable,
+`libasu_client.so`, and `libasu_transport.so` all link the same
+`libasu_metrics.so`, so dynamically loaded ASU code updates the backend exposed
+by `kv-test`.
+
+For a long-running benchmark:
+
+```bash
+kv-test bench store --duration 300
+```
+
+Inspect it without Prometheus:
+
+```bash
+curl -s http://127.0.0.1:9108/health
+curl -s http://127.0.0.1:9108/metrics | grep '^ucm:asu_'
+```
+
+Prometheus can scrape the same endpoint. Grafana must use Prometheus as its
+data source; it does not scrape `kv-test` directly. Short commands may finish
+before a scrape occurs, so set `metrics.shutdown_grace_ms` to at least one
+scrape interval when those final values must be collected.
 
 ## Exit codes
 

@@ -137,6 +137,13 @@ TEST(FakeTransProviderTest, ParsesWorkerThreadCount)
     EXPECT_EQ(MakeFakeTransProviderConfig(config).workerThreads, 6U);
 }
 
+TEST(FakeTransProviderTest, ParsesImmediateCompletionMode)
+{
+    TransportConfig config;
+    config.attrs["fake_backend.complete_immediately"] = "true";
+    EXPECT_TRUE(MakeFakeTransProviderConfig(config).completeImmediately);
+}
+
 TEST(FakeTransProviderTest, ExistHonorsSeekControl)
 {
     const auto storePath =

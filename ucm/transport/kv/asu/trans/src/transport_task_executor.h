@@ -85,7 +85,13 @@ private:
     Status AssignSubBatchConnections(std::vector<TransportSubBatchContext>& subBatchContexts);
     void BuildSubBatchSendBuffers(std::vector<TransportSubBatchContext>& subBatchContexts,
                                   std::vector<TransProvider::SendIoBatch>& ioBatches);
+    void SendSubBatchBuffers(TransportTask& task,
+                             std::vector<TransportSubBatchContext>& subBatchContexts,
+                             const std::vector<TransProvider::SendIoBatch>& ioBatches);
     void SendSubBatchBuffers(std::vector<TransportSubBatchContext>& subBatchContexts,
+                             const std::vector<TransProvider::SendIoBatch>& ioBatches);
+    void SendSubBatchBuffers(TransportTask* task,
+                             std::vector<TransportSubBatchContext>& subBatchContexts,
                              const std::vector<TransProvider::SendIoBatch>& ioBatches);
 
     void AbortSubBatchesBeforeSend(TransportTask& task,

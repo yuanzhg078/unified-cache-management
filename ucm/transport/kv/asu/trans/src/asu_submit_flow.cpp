@@ -22,8 +22,11 @@
  * SOFTWARE.
  * */
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <iterator>
 #include <utility>
+#include "asu_metrics/metrics.h"
 #include "connection_internal.h"
 #include "logger.h"
 #include "transport_task_executor.h"
@@ -126,6 +129,22 @@ void TransportTaskExecutor::BuildSubBatchSendBuffers(
 }
 
 void TransportTaskExecutor::SendSubBatchBuffers(
+    TransportTask& task,
+    std::vector<TransportSubBatchContext>& subBatchContexts,
+    const std::vector<TransProvider::SendIoBatch>& ioBatches)
+{
+    SendSubBatchBuffers(&task, subBatchContexts, ioBatches);
+}
+
+void TransportTaskExecutor::SendSubBatchBuffers(
+    std::vector<TransportSubBatchContext>& subBatchContexts,
+    const std::vector<TransProvider::SendIoBatch>& ioBatches)
+{
+    SendSubBatchBuffers(nullptr, subBatchContexts, ioBatches);
+}
+
+void TransportTaskExecutor::SendSubBatchBuffers(
+    TransportTask* task,
     std::vector<TransportSubBatchContext>& subBatchContexts,
     const std::vector<TransProvider::SendIoBatch>& ioBatches)
 {
@@ -133,6 +152,19 @@ void TransportTaskExecutor::SendSubBatchBuffers(
 
     const auto kernelCount = GetSendCountAttr(config_.attrs, "kernel_count");
     const auto quietCount = GetSendCountAttr(config_.attrs, "quiet_count");
+    if (task != nullptr) {
+        const auto preSendAt = std::chrono::steady_clock::now();
+        const Metrics::BuiltinMetricUpdate preSendUpdates[] = {
+            {Metrics::MetricId::TransportTaskPreSendDuration,
+             std::chrono::duration<double>(preSendAt - task->submittedAt).count()},
+            {Metrics::MetricId::TransportTaskQueueDuration,
+             std::chrono::duration<double>(task->processingStartedAt - task->submittedAt).count()},
+            {Metrics::MetricId::TransportTaskProcessDuration,
+             std::chrono::duration<double>(preSendAt - task->processingStartedAt).count()},
+        };
+        Metrics::UpdateBuiltinBatch(preSendUpdates, std::size(preSendUpdates));
+        task->NotifyPreSend();
+    }
     const auto sendStatuses = transProvider_->Send(ioBatches, kernelCount, quietCount);
     if (sendStatuses.size() != ioBatches.size()) {
         const auto status = Status::Error(StatusCode::INTERNAL_ERROR,

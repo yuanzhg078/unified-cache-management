@@ -37,6 +37,7 @@ target_link_libraries(kv-test
     PRIVATE
         ${CMAKE_DL_LIBS}
         trans
+        asu_metrics
 )
 
 if(BUILD_UNIT_TESTS)

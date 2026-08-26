@@ -24,9 +24,11 @@
 #include "client_task_manager.h"
 #include <algorithm>
 #include <chrono>
+#include <iterator>
 #include <string>
 #include <utility>
 #include "asu_client_impl.h"
+#include "asu_metrics/metrics.h"
 #include "logger/logger.h"
 #include "router/router.h"
 
@@ -73,6 +75,32 @@ Status AddContext(Status status, const std::string& context)
         status.message += ", " + context;
     }
     return status;
+}
+
+double SecondsSince(const std::chrono::steady_clock::time_point& begin)
+{
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+}
+
+void RecordClientTaskSendCompletion(const ClientTask& task)
+{
+    const Metrics::BuiltinMetricUpdate update{
+        Metrics::MetricId::ClientTaskSendDuration, SecondsSince(task.submittedAt)};
+    Metrics::UpdateBuiltinBatch(&update, 1);
+}
+
+void RecordClientTaskPreSend(const ClientTask& task)
+{
+    const Metrics::BuiltinMetricUpdate update{
+        Metrics::MetricId::ClientTaskPreSendDuration, SecondsSince(task.submittedAt)};
+    Metrics::UpdateBuiltinBatch(&update, 1);
+}
+
+void RecordClientTaskProcess(const ClientTask& task)
+{
+    const Metrics::BuiltinMetricUpdate update{
+        Metrics::MetricId::ClientTaskProcessDuration, SecondsSince(task.processingStartedAt)};
+    Metrics::UpdateBuiltinBatch(&update, 1);
 }
 
 }  // namespace
@@ -131,7 +159,9 @@ Status ClientTaskManager::Process(const ClientTaskPtr& task)
         CompleteWithError(task, status);
         return status;
     }
-    return DispatchTask(task);
+    const auto dispatchStatus = DispatchTask(task);
+    if (dispatchStatus.ok()) { RecordClientTaskProcess(*task); }
+    return dispatchStatus;
 }
 
 void ClientTaskManager::CompleteWithError(const ClientTaskPtr& task, const Status& status)
@@ -198,6 +228,7 @@ void ClientTaskManager::CompleteUndispatchedTransportTasks(const ClientTaskPtr& 
                 ? dispatchStatus
                 : Status::Error(StatusCode::CANCELED,
                                 "transport task not dispatched after a dispatch failure");
+        if (failedTask->onSendComplete) { failedTask->NotifySendComplete(); }
         for (auto originalIndex : failedTask->originalIndices) {
             task->entryStatus[originalIndex] = failedTask->finalStatus;
         }
@@ -284,6 +315,9 @@ Status ClientTaskManager::BuildTransportTasks(const ClientTaskPtr& task)
     std::vector<KVBuffer>{}.swap(task->entries);
     std::vector<CacheKey>{}.swap(task->keys);
     task->remainingTransportTasks.store(task->transportTasks.size(), std::memory_order_release);
+    task->remainingTransportPreSendTasks.store(task->transportTasks.size(),
+                                                std::memory_order_release);
+    task->remainingTransportSendTasks.store(task->transportTasks.size(), std::memory_order_release);
     return Status::OK();
 }
 
@@ -304,6 +338,21 @@ Status ClientTaskManager::DispatchTask(const ClientTaskPtr& task)
             auto task = clientTask.lock();
             if (!task) { return; }
             CompleteTransportTask(task, taskIndex, std::move(result));
+        };
+        transportTask->onPreSend = [clientTask] {
+            auto task = clientTask.lock();
+            if (!task) { return; }
+            if (task->remainingTransportPreSendTasks.fetch_sub(1, std::memory_order_acq_rel) ==
+                1) {
+                RecordClientTaskPreSend(*task);
+            }
+        };
+        transportTask->onSendComplete = [clientTask] {
+            auto task = clientTask.lock();
+            if (!task) { return; }
+            if (task->remainingTransportSendTasks.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                RecordClientTaskSendCompletion(*task);
+            }
         };
         transportTask->opType = task->opType;
         auto status = transport->Submit(transportTask);

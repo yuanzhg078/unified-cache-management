@@ -99,6 +99,14 @@ struct TransportTask {
     std::chrono::steady_clock::time_point deadline{std::chrono::steady_clock::time_point::max()};
     TaskCompletionCallback onComplete;
     std::atomic<bool> completionNotified{false};
+    std::chrono::steady_clock::time_point submittedAt{std::chrono::steady_clock::now()};
+    std::chrono::steady_clock::time_point processingStartedAt{};
+    std::chrono::steady_clock::time_point sendCompletedAt{};
+    std::function<void()> onPreSend;
+    std::atomic<bool> preSendNotified{false};
+    std::function<void()> onSendComplete;
+    std::atomic<bool> sendCompletionNotified{false};
+    std::atomic<bool> sendReturned{false};
 
     std::atomic<TransportTaskState> state{TransportTaskState::PENDING};
     Status finalStatus{Status::OK()};
@@ -107,6 +115,8 @@ struct TransportTask {
 
     bool Done() const;
     bool NotifyCompletion(TaskResult result);
+    bool NotifyPreSend();
+    bool NotifySendComplete();
     Status BuildFinalStatus() const;
     void InitializeRemainingSubBatchCount();
     void TryFinalizeFromSubBatches();
@@ -125,6 +135,11 @@ struct ClientTask {
     QueryResult queryResult;
 
     std::atomic<std::size_t> remainingTransportTasks{0};
+    std::atomic<std::size_t> remainingTransportPreSendTasks{0};
+    std::atomic<std::size_t> remainingTransportSendTasks{0};
+    std::chrono::steady_clock::time_point submittedAt{std::chrono::steady_clock::now()};
+    std::chrono::steady_clock::time_point enqueuedAt{};
+    std::chrono::steady_clock::time_point processingStartedAt{};
     std::atomic<ClientTaskState> state{ClientTaskState::PENDING};
     Status finalStatus{Status::OK()};
 
