@@ -36,6 +36,10 @@
 #include <string>
 #include <utility>
 #include "asu_client/asu_client.h"
+#ifdef ASU_UCM_METRICS_ADAPTER_ENABLED
+#include "asu_metrics/metrics.h"
+#include "asu_metrics/ucm_metrics_backend.h"
+#endif
 #include "logger/logger.h"
 #include "trans/event.h"
 #include "ucmstore_v1.h"
@@ -48,6 +52,38 @@ namespace {
 
 using AsuStatus = UC::ASU::Status;
 using AsuStatusCode = UC::ASU::StatusCode;
+
+#ifdef ASU_UCM_METRICS_ADAPTER_ENABLED
+std::mutex gMetricsBackendMutex;
+std::size_t gMetricsBackendUsers{0};
+bool gOwnsMetricsBackend{false};
+
+bool AcquireMetricsBackend()
+{
+    std::lock_guard<std::mutex> lock{gMetricsBackendMutex};
+    if (gMetricsBackendUsers == 0 && !UC::ASU::Metrics::IsEnabled()) {
+        std::string error;
+        if (!UC::ASU::Metrics::Initialize(UC::ASU::Metrics::CreateUcmMetricsBackend(), &error)) {
+            UC_WARN("Failed to initialize ASU UCM metrics adapter: {}.", error);
+            return false;
+        }
+        gOwnsMetricsBackend = true;
+    }
+    ++gMetricsBackendUsers;
+    return true;
+}
+
+void ReleaseMetricsBackend()
+{
+    std::lock_guard<std::mutex> lock{gMetricsBackendMutex};
+    if (gMetricsBackendUsers == 0) { return; }
+    --gMetricsBackendUsers;
+    if (gMetricsBackendUsers == 0 && gOwnsMetricsBackend) {
+        UC::ASU::Metrics::Shutdown();
+        gOwnsMetricsBackend = false;
+    }
+}
+#endif
 
 TensorLayout ParseTensorLayout(const std::string& layout)
 {
@@ -240,6 +276,9 @@ public:
             auto status = client_->Shutdown();
             if (!status.ok()) { UC_ERROR("Failed to shutdown ASU client: {}.", status.message); }
         }
+#ifdef ASU_UCM_METRICS_ADAPTER_ENABLED
+        if (metricsBackendAcquired_) { ReleaseMetricsBackend(); }
+#endif
     }
 
     Status Setup(const Detail::Dictionary& inConfig) override
@@ -248,6 +287,10 @@ public:
         NormalizeAsuShardConfig(config);
         auto status = CheckConfig(config);
         if (status.Failure()) { return status; }
+
+#ifdef ASU_UCM_METRICS_ADAPTER_ENABLED
+        if (!metricsBackendAcquired_) { metricsBackendAcquired_ = AcquireMetricsBackend(); }
+#endif
 
         tensorLayout_ = ParseTensorLayout(config.tensorLayout);
         config_ = std::move(config);
@@ -258,6 +301,12 @@ public:
         if (!asuStatus.ok()) {
             UC_ERROR("Failed to init ASU client: {}.", asuStatus.message);
             client_.reset();
+#ifdef ASU_UCM_METRICS_ADAPTER_ENABLED
+            if (metricsBackendAcquired_) {
+                ReleaseMetricsBackend();
+                metricsBackendAcquired_ = false;
+            }
+#endif
             return ConvertStatus(asuStatus);
         }
 
@@ -773,6 +822,9 @@ private:
     std::unique_ptr<UC::ASU::AsuClient> client_;
     mutable std::mutex persistentRegionsMu_;
     std::vector<RegisteredPersistentRegion> persistentRegions_;
+#ifdef ASU_UCM_METRICS_ADAPTER_ENABLED
+    bool metricsBackendAcquired_{false};
+#endif
 #ifdef ASU_BUILD_TESTS
     ClientFactory clientFactory_;
 #endif

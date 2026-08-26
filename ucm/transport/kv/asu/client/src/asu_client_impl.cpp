@@ -23,16 +23,88 @@
  * */
 #include "asu_client_impl.h"
 #include <algorithm>
+#include <chrono>
+#include <iterator>
 #include <limits>
 #include <thread>
 #include <utility>
 #include "asu_transport/types.h"
+#include "asu_metrics/metric_names.h"
+#include "asu_metrics/metrics.h"
 #include "client_config_parser.h"
 #include "client_router_config.h"
 #include "kv_common/router.h"
 #include "logger/logger.h"
 
 namespace UC::ASU {
+
+namespace {
+
+struct SubmitMetricIds {
+    Metrics::MetricId requests;
+    Metrics::MetricId entries;
+    Metrics::MetricId errors;
+    Metrics::MetricId duration;
+};
+
+bool GetSubmitMetricIds(AsuOpType opType, SubmitMetricIds& ids)
+{
+    using Metrics::MetricId;
+    switch (opType) {
+        case AsuOpType::QUERY:
+            ids = {MetricId::QueryRequests, MetricId::QueryEntries, MetricId::QueryErrors,
+                   MetricId::QuerySubmitDuration};
+            return true;
+        case AsuOpType::LOAD:
+            ids = {MetricId::LoadRequests, MetricId::LoadEntries, MetricId::LoadErrors,
+                   MetricId::LoadSubmitDuration};
+            return true;
+        case AsuOpType::STORE:
+            ids = {MetricId::StoreRequests, MetricId::StoreEntries, MetricId::StoreErrors,
+                   MetricId::StoreSubmitDuration};
+            return true;
+        case AsuOpType::BATCH_LOAD:
+            ids = {MetricId::BatchLoadRequests, MetricId::BatchLoadEntries,
+                   MetricId::BatchLoadErrors, MetricId::BatchLoadSubmitDuration};
+            return true;
+        case AsuOpType::BATCH_STORE:
+            ids = {MetricId::BatchStoreRequests, MetricId::BatchStoreEntries,
+                   MetricId::BatchStoreErrors, MetricId::BatchStoreSubmitDuration};
+            return true;
+        case AsuOpType::DELETE:
+            ids = {MetricId::DeleteRequests, MetricId::DeleteEntries, MetricId::DeleteErrors,
+                   MetricId::DeleteSubmitDuration};
+            return true;
+        default: return false;
+    }
+}
+
+void RecordSubmit(AsuOpType opType, std::size_t entryCount, const Status& status,
+                  const Metrics::MetricTimer& timer)
+{
+    if (!timer.enabled) { return; }
+    SubmitMetricIds ids{};
+    if (!GetSubmitMetricIds(opType, ids)) { return; }
+    const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - timer.begin);
+    Metrics::BuiltinMetricUpdate updates[] = {
+        {ids.requests, 1.0},
+        {ids.entries, static_cast<double>(entryCount)},
+        {ids.duration, elapsed.count()},
+    };
+    if (status.ok()) {
+        Metrics::UpdateBuiltinBatch(updates, std::size(updates));
+        return;
+    }
+    Metrics::BuiltinMetricUpdate failedUpdates[] = {
+        {ids.requests, 1.0},
+        {ids.entries, static_cast<double>(entryCount)},
+        {ids.errors, 1.0},
+        {ids.duration, elapsed.count()},
+    };
+    Metrics::UpdateBuiltinBatch(failedUpdates, std::size(failedUpdates));
+}
+
+}  // namespace
 
 constexpr std::uint32_t kMaxShutdownDrainAttempts = 64;
 
@@ -179,42 +251,78 @@ Status AsuClientImpl::Shutdown()
 
 Status AsuClientImpl::QueryAsync(const std::vector<CacheKey>& keys, TaskId& taskId)
 {
+    const auto timer = Metrics::StartTimer();
     auto status = SubmitAsync(AsuOpType::QUERY, keys, taskId);
+    RecordSubmit(AsuOpType::QUERY, keys.size(), status, timer);
     if (IsRefreshNeeded(status)) { RequestBackgroundRefresh(); }
     return status;
 }
 
 Status AsuClientImpl::LoadAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::LOAD, entries, taskId);
+    const auto timer = Metrics::StartTimer();
+    auto status = SubmitAsync(AsuOpType::LOAD, entries, taskId);
+    RecordSubmit(AsuOpType::LOAD, entries.size(), status, timer);
+    return status;
 }
 
 Status AsuClientImpl::StoreAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::STORE, entries, taskId);
+    const auto timer = Metrics::StartTimer();
+    auto status = SubmitAsync(AsuOpType::STORE, entries, taskId);
+    RecordSubmit(AsuOpType::STORE, entries.size(), status, timer);
+    return status;
 }
 
 Status AsuClientImpl::BatchLoadAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::BATCH_LOAD, entries, taskId);
+    const auto timer = Metrics::StartTimer();
+    auto status = SubmitAsync(AsuOpType::BATCH_LOAD, entries, taskId);
+    RecordSubmit(AsuOpType::BATCH_LOAD, entries.size(), status, timer);
+    return status;
 }
 
 Status AsuClientImpl::BatchStoreAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::BATCH_STORE, entries, taskId);
+    const auto timer = Metrics::StartTimer();
+    auto status = SubmitAsync(AsuOpType::BATCH_STORE, entries, taskId);
+    RecordSubmit(AsuOpType::BATCH_STORE, entries.size(), status, timer);
+    return status;
 }
 
 Status AsuClientImpl::DeleteAsync(const std::vector<CacheKey>& keys, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::DELETE, keys, taskId);
+    const auto timer = Metrics::StartTimer();
+    auto status = SubmitAsync(AsuOpType::DELETE, keys, taskId);
+    RecordSubmit(AsuOpType::DELETE, keys.size(), status, timer);
+    return status;
 }
 
 bool AsuClientImpl::Check(TaskId taskId) { return taskManager_.Check(taskId); }
 
 Status AsuClientImpl::Wait(TaskId taskId, std::uint64_t timeoutMs, TaskResult& result)
 {
+    const auto timer = Metrics::StartTimer();
     const auto waitMs = timeoutMs == 0 ? config_.defaultWaitTimeoutMs : timeoutMs;
     auto status = taskManager_.Wait(taskId, waitMs, result);
+    if (timer.enabled) {
+        const auto elapsed =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - timer.begin);
+        Metrics::BuiltinMetricUpdate updates[] = {
+            {Metrics::MetricId::WaitRequests, 1.0},
+            {Metrics::MetricId::WaitDuration, elapsed.count()},
+        };
+        if (status.ok() && result.status.ok()) {
+            Metrics::UpdateBuiltinBatch(updates, std::size(updates));
+        } else {
+            Metrics::BuiltinMetricUpdate failedUpdates[] = {
+                {Metrics::MetricId::WaitRequests, 1.0},
+                {Metrics::MetricId::WaitErrors, 1.0},
+                {Metrics::MetricId::WaitDuration, elapsed.count()},
+            };
+            Metrics::UpdateBuiltinBatch(failedUpdates, std::size(failedUpdates));
+        }
+    }
     if (status.code == StatusCode::TASK_NOT_FOUND) { return status; }
     if (viewServer_ != nullptr &&
         (viewServer_->ShouldRefreshView(status) || viewServer_->ShouldRefreshView(result))) {
