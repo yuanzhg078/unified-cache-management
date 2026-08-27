@@ -24,6 +24,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -100,9 +101,11 @@ private:
     };
 
     // Creates and queues one entry-based client task.
-    Status SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>& entries, TaskId& taskId);
+    Status SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>& entries, TaskId& taskId,
+                       std::chrono::steady_clock::time_point taskStart);
     // Creates and queues one key-based client task.
-    Status SubmitAsync(AsuOpType opType, const std::vector<CacheKey>& keys, TaskId& taskId);
+    Status SubmitAsync(AsuOpType opType, const std::vector<CacheKey>& keys, TaskId& taskId,
+                       std::chrono::steady_clock::time_point taskStart);
 
     // Runs queued tasks until shutdown and the queue are both complete.
     void WorkerLoop();

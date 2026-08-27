@@ -154,65 +154,61 @@
       "gridPos": {"h": 9, "w": 12, "x": 0, "y": 33},
       "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
       "targets": [
-        {"expr": "histogram_quantile(0.95, sum by (le) (rate(ucm:asu_client_task_queue_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client queue p95", "refId": "A"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_client_task_queue_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client queue p99", "refId": "B"},
-        {"expr": "histogram_quantile(0.95, sum by (le) (rate(ucm:asu_client_task_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client task p95", "refId": "C"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_client_task_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client task p99", "refId": "D"},
-        {"expr": "histogram_quantile(0.95, sum by (le) (rate(ucm:asu_transport_task_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "transport task p95", "refId": "E"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_transport_task_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "transport task p99", "refId": "F"}
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_client_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client task to Send return p99", "refId": "A"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_transport_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "transport task to Send return p99", "refId": "B"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_transport_task_completion_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "Send return to completion p99", "refId": "C"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_client_task_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client task end-to-end p99", "refId": "D"}
       ],
-      "title": "Task Pipeline Latency",
+      "title": "Task Pipeline Latency P99",
       "type": "timeseries"
     },
     {
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
       "gridPos": {"h": 9, "w": 6, "x": 12, "y": 33},
       "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
       "targets": [
-        {"expr": "histogram_quantile(0.50, sum by (le) (rate(ucm:asu_client_task_transport_fanout_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "fanout p50", "refId": "A"},
-        {"expr": "histogram_quantile(0.95, sum by (le) (rate(ucm:asu_client_task_transport_fanout_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "fanout p95", "refId": "B"}
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(ucm:asu_client_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client task to Send return p50", "refId": "A"},
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(ucm:asu_transport_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "transport task to Send return p50", "refId": "B"},
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(ucm:asu_transport_task_completion_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "Send return to completion p50", "refId": "C"},
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(ucm:asu_client_task_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client task end-to-end p50", "refId": "D"}
       ],
-      "title": "Transport Task Fanout",
+      "title": "Task Pipeline Latency P50",
       "type": "timeseries"
     },
     {
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
       "gridPos": {"h": 9, "w": 6, "x": 18, "y": 33},
-      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
       "targets": [
-        {"expr": "sum(rate(ucm:asu_client_tasks_completed_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval]))", "legendFormat": "client task completion", "refId": "A"},
-        {"expr": "sum(rate(ucm:asu_transport_tasks_completed_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval]))", "legendFormat": "transport task completion", "refId": "B"}
+        {"expr": "sum(rate(ucm:asu_client_task_send_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_client_task_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "client task to Send return avg", "refId": "A"},
+        {"expr": "sum(rate(ucm:asu_transport_task_send_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_transport_task_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "transport task to Send return avg", "refId": "B"},
+        {"expr": "sum(rate(ucm:asu_transport_task_completion_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_transport_task_completion_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "Send return to completion avg", "refId": "C"},
+        {"expr": "sum(rate(ucm:asu_client_task_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_client_task_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "client task end-to-end avg", "refId": "D"}
       ],
-      "title": "Task Completion Rate",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 42},
-      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
-      "targets": [
-        {"expr": "sum(rate(ucm:asu_client_task_errors_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_client_tasks_completed_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "client task", "refId": "A"},
-        {"expr": "sum(rate(ucm:asu_transport_task_errors_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_transport_tasks_completed_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "transport task", "refId": "B"}
-      ],
-      "title": "Task Error Rate",
+      "title": "Task Pipeline Latency Average",
       "type": "timeseries"
     },
     {
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 42},
-      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 42},
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
       "targets": [
-        {"expr": "sum(ucm:asu_client_tasks_completed_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "client tasks completed", "refId": "A"},
-        {"expr": "sum(ucm:asu_client_task_errors_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "client task errors", "refId": "B"},
-        {"expr": "sum(ucm:asu_transport_tasks_completed_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "transport tasks completed", "refId": "C"},
-        {"expr": "sum(ucm:asu_transport_task_errors_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "transport task errors", "refId": "D"}
+        {"expr": "sum(ucm:asu_client_task_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "client task Send-return samples", "refId": "A"},
+        {"expr": "sum(ucm:asu_transport_task_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "transport task Send-return samples", "refId": "B"},
+        {"expr": "sum(ucm:asu_transport_task_completion_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "completion samples", "refId": "C"},
+        {"expr": "sum(ucm:asu_client_task_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "end-to-end samples", "refId": "D"}
       ],
-      "title": "Raw Task / Transport Counters",
+      "title": "Task Pipeline Observation Counts",
       "type": "timeseries"
+    },
+    {
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 42},
+      "title": "Task Pipeline Notes",
+      "type": "text",
+      "options": {"content": "<h4>Latency boundaries</h4><p><b>Client task → Send return</b> includes client queueing, routing, transport submission and waits until every transport <code>Send()</code> returns.</p><p><b>Send return → completion</b> is the completion-worker/CQE path. <b>End-to-end</b> is the whole client task from enqueue to final aggregation.</p>", "mode": "html"}
     }
   ],
   "refresh": "5s",

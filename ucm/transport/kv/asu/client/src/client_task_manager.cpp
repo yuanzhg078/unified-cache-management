@@ -77,6 +77,18 @@ Status AddContext(Status status, const std::string& context)
     return status;
 }
 
+double SecondsSince(const std::chrono::steady_clock::time_point& begin)
+{
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - begin).count();
+}
+
+void RecordClientTaskSendCompletion(const ClientTask& task)
+{
+    const Metrics::BuiltinMetricUpdate update{
+        Metrics::MetricId::ClientTaskSendDuration, SecondsSince(task.submittedAt)};
+    Metrics::UpdateBuiltinBatch(&update, 1);
+}
+
 }  // namespace
 
 bool ClientTask::Done() const
@@ -200,6 +212,7 @@ void ClientTaskManager::CompleteUndispatchedTransportTasks(const ClientTaskPtr& 
                 ? dispatchStatus
                 : Status::Error(StatusCode::CANCELED,
                                 "transport task not dispatched after a dispatch failure");
+        if (failedTask->onSendComplete) { failedTask->NotifySendComplete(); }
         for (auto originalIndex : failedTask->originalIndices) {
             task->entryStatus[originalIndex] = failedTask->finalStatus;
         }
@@ -286,6 +299,7 @@ Status ClientTaskManager::BuildTransportTasks(const ClientTaskPtr& task)
     std::vector<KVBuffer>{}.swap(task->entries);
     std::vector<CacheKey>{}.swap(task->keys);
     task->remainingTransportTasks.store(task->transportTasks.size(), std::memory_order_release);
+    task->remainingTransportSendTasks.store(task->transportTasks.size(), std::memory_order_release);
     return Status::OK();
 }
 
@@ -306,6 +320,13 @@ Status ClientTaskManager::DispatchTask(const ClientTaskPtr& task)
             auto task = clientTask.lock();
             if (!task) { return; }
             CompleteTransportTask(task, taskIndex, std::move(result));
+        };
+        transportTask->onSendComplete = [clientTask] {
+            auto task = clientTask.lock();
+            if (!task) { return; }
+            if (task->remainingTransportSendTasks.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                RecordClientTaskSendCompletion(*task);
+            }
         };
         transportTask->opType = task->opType;
         auto status = transport->Submit(transportTask);
