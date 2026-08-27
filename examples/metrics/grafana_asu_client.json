@@ -1,6 +1,6 @@
 {
   "annotations": {"list": []},
-  "description": "ASU client standalone metrics for kv-test. All panels query ucm:asu_client_* metrics exposed by the standalone exporter.",
+  "description": "ASU client and transport standalone metrics for kv-test. Panels cover API submission plus the client-task and transport completion pipeline.",
   "editable": true,
   "panels": [
     {
@@ -140,6 +140,79 @@
       ],
       "title": "Raw Histogram Observation Counts",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 32},
+      "panels": [],
+      "title": "Task / Transport Pipeline",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 33},
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum by (le) (rate(ucm:asu_client_task_queue_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client queue p95", "refId": "A"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_client_task_queue_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client queue p99", "refId": "B"},
+        {"expr": "histogram_quantile(0.95, sum by (le) (rate(ucm:asu_client_task_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client task p95", "refId": "C"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_client_task_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client task p99", "refId": "D"},
+        {"expr": "histogram_quantile(0.95, sum by (le) (rate(ucm:asu_transport_task_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "transport task p95", "refId": "E"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_transport_task_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "transport task p99", "refId": "F"}
+      ],
+      "title": "Task Pipeline Latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 9, "w": 6, "x": 12, "y": 33},
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(ucm:asu_client_task_transport_fanout_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "fanout p50", "refId": "A"},
+        {"expr": "histogram_quantile(0.95, sum by (le) (rate(ucm:asu_client_task_transport_fanout_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "fanout p95", "refId": "B"}
+      ],
+      "title": "Transport Task Fanout",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
+      "gridPos": {"h": 9, "w": 6, "x": 18, "y": 33},
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"expr": "sum(rate(ucm:asu_client_tasks_completed_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval]))", "legendFormat": "client task completion", "refId": "A"},
+        {"expr": "sum(rate(ucm:asu_transport_tasks_completed_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval]))", "legendFormat": "transport task completion", "refId": "B"}
+      ],
+      "title": "Task Completion Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 42},
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"expr": "sum(rate(ucm:asu_client_task_errors_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_client_tasks_completed_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "client task", "refId": "A"},
+        {"expr": "sum(rate(ucm:asu_transport_task_errors_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_transport_tasks_completed_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "transport task", "refId": "B"}
+      ],
+      "title": "Task Error Rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 42},
+      "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"expr": "sum(ucm:asu_client_tasks_completed_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "client tasks completed", "refId": "A"},
+        {"expr": "sum(ucm:asu_client_task_errors_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "client task errors", "refId": "B"},
+        {"expr": "sum(ucm:asu_transport_tasks_completed_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "transport tasks completed", "refId": "C"},
+        {"expr": "sum(ucm:asu_transport_task_errors_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "transport task errors", "refId": "D"}
+      ],
+      "title": "Raw Task / Transport Counters",
+      "type": "timeseries"
     }
   ],
   "refresh": "5s",
@@ -155,5 +228,5 @@
   "timezone": "browser",
   "title": "ASU Client / kv-test Metrics",
   "uid": "asu-client-metrics",
-  "version": 1
+  "version": 2
 }

@@ -86,6 +86,21 @@ batch_store_entries_total  = 10000
 
 `asu_client_wait_duration_seconds` 的含义不同：它记录 `Wait` 的实际等待时长，更接近异步请求等待 completion 返回的时间。
 
+### 2.5 Task 与 transport 分段指标
+
+除接口提交和 `Wait` 外，standalone metrics 还提供 client 内部任务路径的聚合指标：
+
+| 指标 | 含义 |
+|---|---|
+| `ucm:asu_client_task_queue_duration_seconds` | task 从进入 client 队列到 client worker 开始处理的等待时间。持续升高表示 client 侧排队。 |
+| `ucm:asu_client_task_duration_seconds` | task 从入队到所有 transport task 回调聚合完成的端到端时间。 |
+| `ucm:asu_client_task_transport_fanout` | 一个 client task 按路由拆出的 transport task 数；数值升高表示一次请求分散到了更多 ASU。 |
+| `ucm:asu_client_tasks_completed_total` / `ucm:asu_client_task_errors_total` | client task 的完成和失败总数。 |
+| `ucm:asu_transport_task_duration_seconds` | 单个 transport task 从 client 分发到收到完成回调的时长，包含 transport 排队、发送、等待 CQE 和回调路径。 |
+| `ucm:asu_transport_tasks_completed_total` / `ucm:asu_transport_task_errors_total` | transport task 的完成和失败总数。 |
+
+这些指标仍由 client/transport 进程观测，不能代替 ASU 服务端的真实执行耗时。服务端队列和存储执行耗时需要由 ASU 后端单独暴露 metrics。
+
 ## 3. Histogram 怎么看
 
 每个 `*_duration_seconds` 在 Prometheus 中会展开成三组序列：
@@ -140,6 +155,11 @@ Dashboard 模板：`examples/metrics/grafana_asu_client.json`。
 | Raw Entry Counters | 所有 `*_entries_total` | 原始累计 entry/key 数，用于核验批量语义 |
 | Raw Error Counters | 所有 `*_errors_total` | 原始累计错误数，用于确认具体失败的操作 |
 | Raw Histogram Observation Counts | 所有 `*_duration_seconds_count` | 每个耗时 Histogram 是否记录到了样本；通常应与对应请求次数一致 |
+| Task Pipeline Latency | task queue、client task、transport task 的 duration buckets | 并排看 client 排队、task 端到端和 transport/CQE 路径的 P95、P99，定位延迟发生的层级。 |
+| Transport Task Fanout | `asu_client_task_transport_fanout_bucket` | 每个 client task 被路由拆成的 transport task 数；P95 上升表示请求跨更多 ASU。 |
+| Task Completion Rate | client / transport task completed counters | client task 与 transport task 的每秒完成数量。 |
+| Task Error Rate | client / transport task error 与 completed counters | 区分 client 路由/聚合失败和 transport/CQE 路径失败。 |
+| Raw Task / Transport Counters | task completed/error counters | 排查短命 benchmark 时的原始 task 完成及错误数。 |
 
 ## 5. 看图时的常见判断
 
@@ -195,4 +215,3 @@ worker_id   # 例如 asu-0
 ```
 
 Grafana 顶部的 Source、Model、Worker 变量正是这些标签。多个 kv-test 实例、多个 ASU worker 同时写 Prometheus 时，先用标签筛选再判断数值，避免把不同实例的 Counter 或延迟聚合在一起。
-
