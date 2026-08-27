@@ -92,12 +92,10 @@ batch_store_entries_total  = 10000
 
 | 指标 | 含义 |
 |---|---|
-| `ucm:asu_client_task_queue_duration_seconds` | task 从进入 client 队列到 client worker 开始处理的等待时间。持续升高表示 client 侧排队。 |
-| `ucm:asu_client_task_duration_seconds` | task 从入队到所有 transport task 回调聚合完成的端到端时间。 |
-| `ucm:asu_client_task_transport_fanout` | 一个 client task 按路由拆出的 transport task 数；数值升高表示一次请求分散到了更多 ASU。 |
-| `ucm:asu_client_tasks_completed_total` / `ucm:asu_client_task_errors_total` | client task 的完成和失败总数。 |
-| `ucm:asu_transport_task_duration_seconds` | 单个 transport task 从 client 分发到收到完成回调的时长，包含 transport 排队、发送、等待 CQE 和回调路径。 |
-| `ucm:asu_transport_tasks_completed_total` / `ucm:asu_transport_task_errors_total` | transport task 的完成和失败总数。 |
+| `ucm:asu_client_task_send_duration_seconds` | 从 `*Async()` API 入口到它拆出的所有 transport task 的 `Send()` 调用返回，包含 client task 创建、排队、路由与 transport 入队。 |
+| `ucm:asu_transport_task_send_duration_seconds` | 单个 transport task 从 client 分发到实际 `Send()` 返回，包含 transport 队列与请求构造。 |
+| `ucm:asu_transport_task_completion_duration_seconds` | 单个 transport task 从 `Send()` 返回到 completion worker 处理 CQE、触发完成回调的时间。 |
+| `ucm:asu_client_task_duration_seconds` | 从 `*Async()` API 入口到所有 transport task 回调聚合完成的完整 task 端到端时间。 |
 
 这些指标仍由 client/transport 进程观测，不能代替 ASU 服务端的真实执行耗时。服务端队列和存储执行耗时需要由 ASU 后端单独暴露 metrics。
 
@@ -155,11 +153,9 @@ Dashboard 模板：`examples/metrics/grafana_asu_client.json`。
 | Raw Entry Counters | 所有 `*_entries_total` | 原始累计 entry/key 数，用于核验批量语义 |
 | Raw Error Counters | 所有 `*_errors_total` | 原始累计错误数，用于确认具体失败的操作 |
 | Raw Histogram Observation Counts | 所有 `*_duration_seconds_count` | 每个耗时 Histogram 是否记录到了样本；通常应与对应请求次数一致 |
-| Task Pipeline Latency | task queue、client task、transport task 的 duration buckets | 并排看 client 排队、task 端到端和 transport/CQE 路径的 P95、P99，定位延迟发生的层级。 |
-| Transport Task Fanout | `asu_client_task_transport_fanout_bucket` | 每个 client task 被路由拆成的 transport task 数；P95 上升表示请求跨更多 ASU。 |
-| Task Completion Rate | client / transport task completed counters | client task 与 transport task 的每秒完成数量。 |
-| Task Error Rate | client / transport task error 与 completed counters | 区分 client 路由/聚合失败和 transport/CQE 路径失败。 |
-| Raw Task / Transport Counters | task completed/error counters | 排查短命 benchmark 时的原始 task 完成及错误数。 |
+| Task Pipeline Latency P99 / P50 | 四段 task pipeline 的 duration buckets | 对照 P50 和 P99，定位延迟在 client task 到 Send、transport 到 Send、CQE completion，还是最终 task 聚合阶段。 |
+| Task Pipeline Latency Average | 四段 duration 的 sum / count | 查看各阶段平均耗时，辅助解释分位数曲线。 |
+| Task Pipeline Observation Counts | 四段 duration 的 `_count` | 验证每一段都有实际样本；短命 bench 不足以计算稳定分位数时优先看此面板。 |
 
 ## 5. 看图时的常见判断
 

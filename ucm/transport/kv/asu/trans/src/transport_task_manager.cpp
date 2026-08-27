@@ -1,6 +1,8 @@
 #include "transport_task_manager.h"
+#include <chrono>
 #include <utility>
 #include "asu_response_status.h"
+#include "asu_metrics/metrics.h"
 
 namespace UC::ASU {
 
@@ -17,6 +19,15 @@ bool TransportTask::NotifyCompletion(TaskResult result)
         return false;
     }
     onComplete(std::move(result));
+    return true;
+}
+
+bool TransportTask::NotifySendComplete()
+{
+    if (!onSendComplete || sendCompletionNotified.exchange(true, std::memory_order_acq_rel)) {
+        return false;
+    }
+    onSendComplete();
     return true;
 }
 
@@ -55,6 +66,14 @@ void TransportTask::TryFinalizeFromSubBatches()
 
 void TransportTaskManager::NotifyCompletion(const TransportTaskPtr& task)
 {
+    if (task->sendReturned.load(std::memory_order_acquire)) {
+        const Metrics::BuiltinMetricUpdate completionUpdate{
+            Metrics::MetricId::TransportTaskCompletionDuration,
+            std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                          task->sendCompletedAt)
+                .count()};
+        Metrics::UpdateBuiltinBatch(&completionUpdate, 1);
+    }
     TaskResult result;
     BuildResult(*task, result);
     (void)task->NotifyCompletion(std::move(result));

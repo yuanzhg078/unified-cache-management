@@ -251,8 +251,9 @@ Status AsuClientImpl::Shutdown()
 
 Status AsuClientImpl::QueryAsync(const std::vector<CacheKey>& keys, TaskId& taskId)
 {
+    const auto taskStart = std::chrono::steady_clock::now();
     const auto timer = Metrics::StartTimer();
-    auto status = SubmitAsync(AsuOpType::QUERY, keys, taskId);
+    auto status = SubmitAsync(AsuOpType::QUERY, keys, taskId, taskStart);
     RecordSubmit(AsuOpType::QUERY, keys.size(), status, timer);
     if (IsRefreshNeeded(status)) { RequestBackgroundRefresh(); }
     return status;
@@ -260,40 +261,45 @@ Status AsuClientImpl::QueryAsync(const std::vector<CacheKey>& keys, TaskId& task
 
 Status AsuClientImpl::LoadAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
+    const auto taskStart = std::chrono::steady_clock::now();
     const auto timer = Metrics::StartTimer();
-    auto status = SubmitAsync(AsuOpType::LOAD, entries, taskId);
+    auto status = SubmitAsync(AsuOpType::LOAD, entries, taskId, taskStart);
     RecordSubmit(AsuOpType::LOAD, entries.size(), status, timer);
     return status;
 }
 
 Status AsuClientImpl::StoreAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
+    const auto taskStart = std::chrono::steady_clock::now();
     const auto timer = Metrics::StartTimer();
-    auto status = SubmitAsync(AsuOpType::STORE, entries, taskId);
+    auto status = SubmitAsync(AsuOpType::STORE, entries, taskId, taskStart);
     RecordSubmit(AsuOpType::STORE, entries.size(), status, timer);
     return status;
 }
 
 Status AsuClientImpl::BatchLoadAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
+    const auto taskStart = std::chrono::steady_clock::now();
     const auto timer = Metrics::StartTimer();
-    auto status = SubmitAsync(AsuOpType::BATCH_LOAD, entries, taskId);
+    auto status = SubmitAsync(AsuOpType::BATCH_LOAD, entries, taskId, taskStart);
     RecordSubmit(AsuOpType::BATCH_LOAD, entries.size(), status, timer);
     return status;
 }
 
 Status AsuClientImpl::BatchStoreAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
+    const auto taskStart = std::chrono::steady_clock::now();
     const auto timer = Metrics::StartTimer();
-    auto status = SubmitAsync(AsuOpType::BATCH_STORE, entries, taskId);
+    auto status = SubmitAsync(AsuOpType::BATCH_STORE, entries, taskId, taskStart);
     RecordSubmit(AsuOpType::BATCH_STORE, entries.size(), status, timer);
     return status;
 }
 
 Status AsuClientImpl::DeleteAsync(const std::vector<CacheKey>& keys, TaskId& taskId)
 {
+    const auto taskStart = std::chrono::steady_clock::now();
     const auto timer = Metrics::StartTimer();
-    auto status = SubmitAsync(AsuOpType::DELETE, keys, taskId);
+    auto status = SubmitAsync(AsuOpType::DELETE, keys, taskId, taskStart);
     RecordSubmit(AsuOpType::DELETE, keys.size(), status, timer);
     return status;
 }
@@ -439,7 +445,8 @@ Status AsuClientImpl::RegisterRegionsOnce(const std::vector<MemoryRegion>& regio
 }
 
 Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>& entries,
-                                  TaskId& taskId)
+                                  TaskId& taskId,
+                                  std::chrono::steady_clock::time_point taskStart)
 {
     auto snapshot = GetSnapshot();
     if (!snapshot || !snapshot->router || snapshot->transports.empty()) {
@@ -455,6 +462,7 @@ Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>&
     }
 
     auto ctx = std::make_unique<ClientTask>();
+    ctx->submittedAt = taskStart;
     ctx->opType = opType;
     ctx->viewSnapshot = snapshot;
     ctx->entries = entries;
@@ -494,7 +502,8 @@ Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>&
 }
 
 Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<CacheKey>& keys,
-                                  TaskId& taskId)
+                                  TaskId& taskId,
+                                  std::chrono::steady_clock::time_point taskStart)
 {
     auto snapshot = GetSnapshot();
     if (!snapshot || !snapshot->router || snapshot->transports.empty()) {
@@ -509,6 +518,7 @@ Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<CacheKey>&
     }
 
     auto ctx = std::make_unique<ClientTask>();
+    ctx->submittedAt = taskStart;
     ctx->opType = opType;
     ctx->viewSnapshot = snapshot;
     ctx->keys = keys;
