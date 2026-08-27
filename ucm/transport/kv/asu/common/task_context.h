@@ -99,6 +99,7 @@ struct TransportTask {
     std::chrono::steady_clock::time_point deadline{std::chrono::steady_clock::time_point::max()};
     TaskCompletionCallback onComplete;
     std::atomic<bool> completionNotified{false};
+    std::chrono::steady_clock::time_point submittedAt{std::chrono::steady_clock::now()};
 
     std::atomic<TransportTaskState> state{TransportTaskState::PENDING};
     Status finalStatus{Status::OK()};
@@ -125,6 +126,7 @@ struct ClientTask {
     QueryResult queryResult;
 
     std::atomic<std::size_t> remainingTransportTasks{0};
+    std::chrono::steady_clock::time_point submittedAt{std::chrono::steady_clock::now()};
     std::atomic<ClientTaskState> state{ClientTaskState::PENDING};
     Status finalStatus{Status::OK()};
 

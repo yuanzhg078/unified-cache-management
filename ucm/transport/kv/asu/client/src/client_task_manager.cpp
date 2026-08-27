@@ -24,9 +24,11 @@
 #include "client_task_manager.h"
 #include <algorithm>
 #include <chrono>
+#include <iterator>
 #include <string>
 #include <utility>
 #include "asu_client_impl.h"
+#include "asu_metrics/metrics.h"
 #include "logger/logger.h"
 #include "router/router.h"
 

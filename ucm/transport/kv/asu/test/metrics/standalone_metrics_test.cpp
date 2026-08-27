@@ -136,6 +136,9 @@ TEST(StandaloneMetricsTest, UpdatesBuiltInMetricsInOneBatch)
         {MetricId::StoreRequests, 1.0},
         {MetricId::StoreEntries, 8.0},
         {MetricId::StoreSubmitDuration, 0.002},
+        {MetricId::ClientTaskQueueDuration, 0.001},
+        {MetricId::ClientTaskTransportFanout, 2.0},
+        {MetricId::TransportTaskCompleted, 2.0},
     };
     UpdateBuiltinBatch(updates, std::size(updates));
     Flush();
@@ -144,6 +147,12 @@ TEST(StandaloneMetricsTest, UpdatesBuiltInMetricsInOneBatch)
     EXPECT_NE(response.find("ucm:asu_client_store_requests_total 1"), std::string::npos);
     EXPECT_NE(response.find("ucm:asu_client_store_entries_total 8"), std::string::npos);
     EXPECT_NE(response.find("ucm:asu_client_store_submit_duration_seconds_count 1"),
+              std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_client_task_queue_duration_seconds_count 1"),
+              std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_client_task_transport_fanout_count 1"),
+              std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_transport_tasks_completed_total 2"),
               std::string::npos);
 
     Shutdown();

@@ -35,6 +35,14 @@ namespace UC::ASU::Metrics {
     X(WaitRequests, "asu_client_wait_requests_total", COUNTER, "Total ASU client wait calls") \
     X(WaitErrors, "asu_client_wait_errors_total", COUNTER, "Total failed ASU client wait calls") \
     X(WaitDuration, "asu_client_wait_duration_seconds", HISTOGRAM, "ASU client wait duration in seconds") \
+    X(ClientTaskCompleted, "asu_client_tasks_completed_total", COUNTER, "Total ASU client tasks completed") \
+    X(ClientTaskErrors, "asu_client_task_errors_total", COUNTER, "Total failed ASU client tasks") \
+    X(ClientTaskQueueDuration, "asu_client_task_queue_duration_seconds", HISTOGRAM, "ASU client task queue wait before processing") \
+    X(ClientTaskDuration, "asu_client_task_duration_seconds", HISTOGRAM, "ASU client task end-to-end duration from enqueue to completion") \
+    X(ClientTaskTransportFanout, "asu_client_task_transport_fanout", HISTOGRAM, "Transport tasks created per ASU client task") \
+    X(TransportTaskCompleted, "asu_transport_tasks_completed_total", COUNTER, "Total ASU transport tasks completed") \
+    X(TransportTaskErrors, "asu_transport_task_errors_total", COUNTER, "Total failed ASU transport tasks") \
+    X(TransportTaskDuration, "asu_transport_task_duration_seconds", HISTOGRAM, "ASU transport task duration from client dispatch to completion") \
     X(ExporterUp, "asu_metrics_exporter_up", GAUGE, "Whether the ASU standalone metrics exporter is running") \
     X(ExporterHttpRequests, "asu_metrics_exporter_http_requests_total", COUNTER, "Total HTTP requests served by the ASU metrics endpoint")
 
