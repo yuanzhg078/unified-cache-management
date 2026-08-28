@@ -37,6 +37,7 @@ namespace UC::ASU::Metrics {
     X(WaitDuration, "asu_client_wait_duration_seconds", HISTOGRAM, "ASU client wait duration in seconds") \
     X(ClientTaskSendDuration, "asu_client_task_send_duration_seconds", HISTOGRAM, "ASU client task duration from enqueue until all transport Send calls return") \
     X(ClientTaskDuration, "asu_client_task_duration_seconds", HISTOGRAM, "ASU client task end-to-end duration from enqueue to completion") \
+    X(TransportTaskPreSendDuration, "asu_transport_task_pre_send_duration_seconds", HISTOGRAM, "ASU transport task duration from client dispatch until immediately before Send") \
     X(TransportTaskSendDuration, "asu_transport_task_send_duration_seconds", HISTOGRAM, "ASU transport task duration from client dispatch until Send returns") \
     X(TransportTaskCompletionDuration, "asu_transport_task_completion_duration_seconds", HISTOGRAM, "ASU transport task duration from Send return until completion callback") \
     X(ExporterUp, "asu_metrics_exporter_up", GAUGE, "Whether the ASU standalone metrics exporter is running") \

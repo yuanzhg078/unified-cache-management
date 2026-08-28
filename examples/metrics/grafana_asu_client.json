@@ -156,6 +156,7 @@
       "targets": [
         {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_client_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client task to Send return p99", "refId": "A"},
         {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_transport_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "transport task to Send return p99", "refId": "B"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_transport_task_pre_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "transport task to pre-Send p99", "refId": "E"},
         {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_transport_task_completion_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "Send return to completion p99", "refId": "C"},
         {"expr": "histogram_quantile(0.99, sum by (le) (rate(ucm:asu_client_task_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client task end-to-end p99", "refId": "D"}
       ],
@@ -170,6 +171,7 @@
       "targets": [
         {"expr": "histogram_quantile(0.50, sum by (le) (rate(ucm:asu_client_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client task to Send return p50", "refId": "A"},
         {"expr": "histogram_quantile(0.50, sum by (le) (rate(ucm:asu_transport_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "transport task to Send return p50", "refId": "B"},
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(ucm:asu_transport_task_pre_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "transport task to pre-Send p50", "refId": "E"},
         {"expr": "histogram_quantile(0.50, sum by (le) (rate(ucm:asu_transport_task_completion_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "Send return to completion p50", "refId": "C"},
         {"expr": "histogram_quantile(0.50, sum by (le) (rate(ucm:asu_client_task_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "client task end-to-end p50", "refId": "D"}
       ],
@@ -182,10 +184,11 @@
       "gridPos": {"h": 9, "w": 6, "x": 18, "y": 33},
       "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
       "targets": [
-        {"expr": "sum(rate(ucm:asu_client_task_send_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_client_task_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "client task to Send return avg", "refId": "A"},
-        {"expr": "sum(rate(ucm:asu_transport_task_send_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_transport_task_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "transport task to Send return avg", "refId": "B"},
-        {"expr": "sum(rate(ucm:asu_transport_task_completion_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_transport_task_completion_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "Send return to completion avg", "refId": "C"},
-        {"expr": "sum(rate(ucm:asu_client_task_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_client_task_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "client task end-to-end avg", "refId": "D"}
+        {"expr": "sum(rate(ucm:asu_client_task_send_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / sum(rate(ucm:asu_client_task_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval]))", "legendFormat": "client task to Send return avg", "refId": "A"},
+        {"expr": "sum(rate(ucm:asu_transport_task_send_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / sum(rate(ucm:asu_transport_task_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval]))", "legendFormat": "transport task to Send return avg", "refId": "B"},
+        {"expr": "sum(rate(ucm:asu_transport_task_pre_send_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / sum(rate(ucm:asu_transport_task_pre_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval]))", "legendFormat": "transport task to pre-Send avg", "refId": "E"},
+        {"expr": "sum(rate(ucm:asu_transport_task_completion_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / sum(rate(ucm:asu_transport_task_completion_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval]))", "legendFormat": "Send return to completion avg", "refId": "C"},
+        {"expr": "sum(rate(ucm:asu_client_task_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / sum(rate(ucm:asu_client_task_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval]))", "legendFormat": "client task end-to-end avg", "refId": "D"}
       ],
       "title": "Task Pipeline Latency Average",
       "type": "timeseries"
@@ -198,6 +201,7 @@
       "targets": [
         {"expr": "sum(ucm:asu_client_task_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "client task Send-return samples", "refId": "A"},
         {"expr": "sum(ucm:asu_transport_task_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "transport task Send-return samples", "refId": "B"},
+        {"expr": "sum(ucm:asu_transport_task_pre_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "transport task pre-Send samples", "refId": "E"},
         {"expr": "sum(ucm:asu_transport_task_completion_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "completion samples", "refId": "C"},
         {"expr": "sum(ucm:asu_client_task_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "end-to-end samples", "refId": "D"}
       ],
@@ -208,7 +212,7 @@
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 42},
       "title": "Task Pipeline Notes",
       "type": "text",
-      "options": {"content": "<h4>Latency boundaries</h4><p><b>Client task → Send return</b> includes client queueing, routing, transport submission and waits until every transport <code>Send()</code> returns.</p><p><b>Send return → completion</b> is the completion-worker/CQE path. <b>End-to-end</b> is the whole client task from enqueue to final aggregation.</p>", "mode": "html"}
+      "options": {"content": "<h4>Latency boundaries</h4><p><b>Transport task → pre-Send</b> includes transport queueing, executor scheduling, sub-batch preparation, buffer construction and Send-attribute setup, ending immediately before the provider <code>Send()</code>.</p><p><b>Transport task → Send return</b> adds the provider Send call itself. <b>Send return → completion</b> is the completion-worker/CQE path. <b>End-to-end</b> is the whole client task from enqueue to final aggregation.</p>", "mode": "html"}
     }
   ],
   "refresh": "5s",
@@ -224,5 +228,5 @@
   "timezone": "browser",
   "title": "ASU Client / kv-test Metrics",
   "uid": "asu-client-metrics",
-  "version": 2
+  "version": 3
 }
