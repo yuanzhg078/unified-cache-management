@@ -491,12 +491,17 @@ Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>&
             taskId = kInvalidTaskId;
             return NotInitialized();
         }
+        rawCtx->enqueuedAt = std::chrono::steady_clock::now();
         if (!taskQueue_.TryPush(std::move(rawCtx))) {
             (void)taskManager_.Remove(taskId);
             taskId = kInvalidTaskId;
             return Status::Error(StatusCode::RESOURCE_BUSY, "client task queue is full");
         }
     }
+    const Metrics::BuiltinMetricUpdate enqueueUpdate{
+        Metrics::MetricId::ClientTaskEnqueueDuration,
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - taskStart).count()};
+    Metrics::UpdateBuiltinBatch(&enqueueUpdate, 1);
     return Status::OK();
 }
 
@@ -540,18 +545,28 @@ Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<CacheKey>&
             taskId = kInvalidTaskId;
             return NotInitialized();
         }
+        rawCtx->enqueuedAt = std::chrono::steady_clock::now();
         if (!taskQueue_.TryPush(std::move(rawCtx))) {
             (void)taskManager_.Remove(taskId);
             taskId = kInvalidTaskId;
             return Status::Error(StatusCode::RESOURCE_BUSY, "client task queue is full");
         }
     }
+    const Metrics::BuiltinMetricUpdate enqueueUpdate{
+        Metrics::MetricId::ClientTaskEnqueueDuration,
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - taskStart).count()};
+    Metrics::UpdateBuiltinBatch(&enqueueUpdate, 1);
     return Status::OK();
 }
 
 void AsuClientImpl::WorkerLoop()
 {
     auto processTask = [this](ClientTaskPtr ctx) {
+        ctx->processingStartedAt = std::chrono::steady_clock::now();
+        const Metrics::BuiltinMetricUpdate queueUpdate{
+            Metrics::MetricId::ClientTaskQueueDuration,
+            std::chrono::duration<double>(ctx->processingStartedAt - ctx->enqueuedAt).count()};
+        Metrics::UpdateBuiltinBatch(&queueUpdate, 1);
         auto status = taskManager_.Process(ctx);
         if (IsRefreshNeeded(status)) { RequestBackgroundRefresh(); }
     };

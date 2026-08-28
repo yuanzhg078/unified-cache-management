@@ -35,10 +35,15 @@ namespace UC::ASU::Metrics {
     X(WaitRequests, "asu_client_wait_requests_total", COUNTER, "Total ASU client wait calls") \
     X(WaitErrors, "asu_client_wait_errors_total", COUNTER, "Total failed ASU client wait calls") \
     X(WaitDuration, "asu_client_wait_duration_seconds", HISTOGRAM, "ASU client wait duration in seconds") \
+    X(ClientTaskEnqueueDuration, "asu_client_task_enqueue_duration_seconds", HISTOGRAM, "ASU client task duration from API entry until client queue enqueue") \
+    X(ClientTaskQueueDuration, "asu_client_task_queue_duration_seconds", HISTOGRAM, "ASU client task queue wait duration") \
+    X(ClientTaskProcessDuration, "asu_client_task_process_duration_seconds", HISTOGRAM, "ASU client worker duration until all transport tasks reach provider Send") \
     X(ClientTaskPreSendDuration, "asu_client_task_pre_send_duration_seconds", HISTOGRAM, "ASU client task duration from enqueue until all transport tasks reach provider Send") \
     X(ClientTaskSendDuration, "asu_client_task_send_duration_seconds", HISTOGRAM, "ASU client task duration from enqueue until all transport Send calls return") \
     X(ClientTaskDuration, "asu_client_task_duration_seconds", HISTOGRAM, "ASU client task end-to-end duration from enqueue to completion") \
     X(TransportTaskPreSendDuration, "asu_transport_task_pre_send_duration_seconds", HISTOGRAM, "ASU transport task duration from client dispatch until immediately before Send") \
+    X(TransportTaskQueueDuration, "asu_transport_task_queue_duration_seconds", HISTOGRAM, "ASU transport task queue wait duration") \
+    X(TransportTaskProcessDuration, "asu_transport_task_process_duration_seconds", HISTOGRAM, "ASU transport executor processing duration until immediately before Send") \
     X(TransportTaskSendDuration, "asu_transport_task_send_duration_seconds", HISTOGRAM, "ASU transport task duration from client dispatch until Send returns") \
     X(TransportTaskCompletionDuration, "asu_transport_task_completion_duration_seconds", HISTOGRAM, "ASU transport task duration from Send return until completion callback") \
     X(ExporterUp, "asu_metrics_exporter_up", GAUGE, "Whether the ASU standalone metrics exporter is running") \

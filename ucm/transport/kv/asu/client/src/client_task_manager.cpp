@@ -96,6 +96,13 @@ void RecordClientTaskPreSend(const ClientTask& task)
     Metrics::UpdateBuiltinBatch(&update, 1);
 }
 
+void RecordClientTaskProcess(const ClientTask& task)
+{
+    const Metrics::BuiltinMetricUpdate update{
+        Metrics::MetricId::ClientTaskProcessDuration, SecondsSince(task.processingStartedAt)};
+    Metrics::UpdateBuiltinBatch(&update, 1);
+}
+
 }  // namespace
 
 bool ClientTask::Done() const
@@ -336,6 +343,7 @@ Status ClientTaskManager::DispatchTask(const ClientTaskPtr& task)
             if (task->remainingTransportPreSendTasks.fetch_sub(1, std::memory_order_acq_rel) ==
                 1) {
                 RecordClientTaskPreSend(*task);
+                RecordClientTaskProcess(*task);
             }
         };
         transportTask->onSendComplete = [clientTask] {
