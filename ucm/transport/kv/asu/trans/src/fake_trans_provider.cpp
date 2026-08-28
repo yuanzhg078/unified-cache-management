@@ -376,7 +376,7 @@ std::size_t CompletionDwordCount(const std::uint32_t* request)
 Status CompleteFakeBackendRequest(const FakeTransProviderConfig& config, const void* sendBuffer,
                                   std::uint64_t len, std::vector<std::uint32_t>& completion)
 {
-    if (config.latencyMs > 0) {
+    if (!config.completeImmediately && config.latencyMs > 0) {
         std::this_thread::sleep_for(std::chrono::milliseconds(config.latencyMs));
     }
 
@@ -385,6 +385,12 @@ Status CompleteFakeBackendRequest(const FakeTransProviderConfig& config, const v
     }
 
     const auto* request = reinterpret_cast<const std::uint32_t*>(sendBuffer);
+    if (config.completeImmediately) {
+        completion.assign(kCqeDwordCount, 0);
+        PackCqeHeader(completion.data(), static_cast<std::uint16_t>(RequestCid(request)),
+                      kCqeSuccess);
+        return Status::OK();
+    }
     completion.assign(CompletionDwordCount(request), 0);
     auto* flagBuffer = completion.data();
     const auto asuId = RequestAsuId(request);
@@ -419,6 +425,11 @@ FakeTransProviderConfig MakeFakeTransProviderConfig(const TransportConfig& confi
     auto latencyIter = config.attrs.find("fake_backend.latency_ms");
     if (latencyIter != config.attrs.end()) {
         fakeConfig.latencyMs = static_cast<std::uint64_t>(std::stoull(latencyIter->second));
+    }
+    auto immediateIter = config.attrs.find("fake_backend.complete_immediately");
+    if (immediateIter != config.attrs.end()) {
+        fakeConfig.completeImmediately =
+            immediateIter->second == "1" || immediateIter->second == "true";
     }
     auto deviceIter = config.attrs.find("fake_backend.device_id");
     if (deviceIter != config.attrs.end()) {
