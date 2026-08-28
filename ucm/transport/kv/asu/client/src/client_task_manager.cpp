@@ -159,7 +159,9 @@ Status ClientTaskManager::Process(const ClientTaskPtr& task)
         CompleteWithError(task, status);
         return status;
     }
-    return DispatchTask(task);
+    const auto dispatchStatus = DispatchTask(task);
+    if (dispatchStatus.ok()) { RecordClientTaskProcess(*task); }
+    return dispatchStatus;
 }
 
 void ClientTaskManager::CompleteWithError(const ClientTaskPtr& task, const Status& status)
@@ -343,7 +345,6 @@ Status ClientTaskManager::DispatchTask(const ClientTaskPtr& task)
             if (task->remainingTransportPreSendTasks.fetch_sub(1, std::memory_order_acq_rel) ==
                 1) {
                 RecordClientTaskPreSend(*task);
-                RecordClientTaskProcess(*task);
             }
         };
         transportTask->onSendComplete = [clientTask] {
