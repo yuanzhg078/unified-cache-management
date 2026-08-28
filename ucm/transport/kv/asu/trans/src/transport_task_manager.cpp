@@ -22,6 +22,13 @@ bool TransportTask::NotifyCompletion(TaskResult result)
     return true;
 }
 
+bool TransportTask::NotifyPreSend()
+{
+    if (!onPreSend || preSendNotified.exchange(true, std::memory_order_acq_rel)) { return false; }
+    onPreSend();
+    return true;
+}
+
 bool TransportTask::NotifySendComplete()
 {
     if (!onSendComplete || sendCompletionNotified.exchange(true, std::memory_order_acq_rel)) {

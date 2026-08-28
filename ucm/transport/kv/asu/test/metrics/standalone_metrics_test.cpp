@@ -136,6 +136,7 @@ TEST(StandaloneMetricsTest, UpdatesBuiltInMetricsInOneBatch)
         {MetricId::StoreRequests, 1.0},
         {MetricId::StoreEntries, 8.0},
         {MetricId::StoreSubmitDuration, 0.002},
+        {MetricId::ClientTaskPreSendDuration, 0.001},
         {MetricId::ClientTaskSendDuration, 0.001},
         {MetricId::ClientTaskDuration, 0.002},
         {MetricId::TransportTaskPreSendDuration, 0.001},
@@ -149,6 +150,8 @@ TEST(StandaloneMetricsTest, UpdatesBuiltInMetricsInOneBatch)
     EXPECT_NE(response.find("ucm:asu_client_store_requests_total 1"), std::string::npos);
     EXPECT_NE(response.find("ucm:asu_client_store_entries_total 8"), std::string::npos);
     EXPECT_NE(response.find("ucm:asu_client_store_submit_duration_seconds_count 1"),
+              std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_client_task_pre_send_duration_seconds_count 1"),
               std::string::npos);
     EXPECT_NE(response.find("ucm:asu_client_task_send_duration_seconds_count 1"),
               std::string::npos);

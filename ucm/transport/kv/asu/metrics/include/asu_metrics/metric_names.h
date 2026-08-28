@@ -35,6 +35,7 @@ namespace UC::ASU::Metrics {
     X(WaitRequests, "asu_client_wait_requests_total", COUNTER, "Total ASU client wait calls") \
     X(WaitErrors, "asu_client_wait_errors_total", COUNTER, "Total failed ASU client wait calls") \
     X(WaitDuration, "asu_client_wait_duration_seconds", HISTOGRAM, "ASU client wait duration in seconds") \
+    X(ClientTaskPreSendDuration, "asu_client_task_pre_send_duration_seconds", HISTOGRAM, "ASU client task duration from enqueue until all transport tasks reach provider Send") \
     X(ClientTaskSendDuration, "asu_client_task_send_duration_seconds", HISTOGRAM, "ASU client task duration from enqueue until all transport Send calls return") \
     X(ClientTaskDuration, "asu_client_task_duration_seconds", HISTOGRAM, "ASU client task end-to-end duration from enqueue to completion") \
     X(TransportTaskPreSendDuration, "asu_transport_task_pre_send_duration_seconds", HISTOGRAM, "ASU transport task duration from client dispatch until immediately before Send") \

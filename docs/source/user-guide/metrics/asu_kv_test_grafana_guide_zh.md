@@ -92,6 +92,7 @@ batch_store_entries_total  = 10000
 
 | 指标 | 含义 |
 |---|---|
+| `ucm:asu_client_task_pre_send_duration_seconds` | 从 `*Async()` API 入口到该 client task 拆出的**全部** transport task 都抵达实际 provider `Send()` 调用前。包含 client 执行队列等待、路由、拆分、逐个入 transport 队列，以及 transport executor 的排队和发送准备；每个 client task 只记录一次。 |
 | `ucm:asu_client_task_send_duration_seconds` | 从 `*Async()` API 入口到它拆出的所有 transport task 的 `Send()` 调用返回，包含 client task 创建、排队、路由与 transport 入队。 |
 | `ucm:asu_transport_task_pre_send_duration_seconds` | 单个 transport task 从 client 分发到实际 provider `Send()` 前，包含 transport 队列、executor 调度、sub-batch 准备、buffer 构造与 Send 属性准备。 |
 | `ucm:asu_transport_task_send_duration_seconds` | 单个 transport task 从 client 分发到实际 `Send()` 返回，包含 transport 队列与请求构造。 |
