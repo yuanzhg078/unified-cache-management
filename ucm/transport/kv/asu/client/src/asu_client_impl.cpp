@@ -495,8 +495,13 @@ Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>&
             taskId = kInvalidTaskId;
             return NotInitialized();
         }
+        rawCtx->enqueuedAt = std::chrono::steady_clock::now();
         taskQueue_.emplace_back(std::move(rawCtx));
     }
+    const Metrics::BuiltinMetricUpdate enqueueUpdate{
+        Metrics::MetricId::ClientTaskEnqueueDuration,
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - taskStart).count()};
+    Metrics::UpdateBuiltinBatch(&enqueueUpdate, 1);
     taskQueueCv_.notify_one();
     return Status::OK();
 }
@@ -541,8 +546,13 @@ Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<CacheKey>&
             taskId = kInvalidTaskId;
             return NotInitialized();
         }
+        rawCtx->enqueuedAt = std::chrono::steady_clock::now();
         taskQueue_.emplace_back(std::move(rawCtx));
     }
+    const Metrics::BuiltinMetricUpdate enqueueUpdate{
+        Metrics::MetricId::ClientTaskEnqueueDuration,
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - taskStart).count()};
+    Metrics::UpdateBuiltinBatch(&enqueueUpdate, 1);
     taskQueueCv_.notify_one();
     return Status::OK();
 }
@@ -561,6 +571,11 @@ void AsuClientImpl::WorkerLoop()
             ctx = std::move(taskQueue_.front());
             taskQueue_.pop_front();
         }
+        ctx->processingStartedAt = std::chrono::steady_clock::now();
+        const Metrics::BuiltinMetricUpdate queueUpdate{
+            Metrics::MetricId::ClientTaskQueueDuration,
+            std::chrono::duration<double>(ctx->processingStartedAt - ctx->enqueuedAt).count()};
+        Metrics::UpdateBuiltinBatch(&queueUpdate, 1);
         auto status = taskManager_.Process(ctx);
         if (IsRefreshNeeded(status)) { RequestBackgroundRefresh(); }
     }

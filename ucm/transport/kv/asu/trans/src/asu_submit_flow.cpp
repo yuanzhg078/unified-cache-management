@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <iterator>
 #include <utility>
 #include "asu_metrics/metrics.h"
 #include "connection_internal.h"
@@ -155,11 +156,16 @@ void TransportTaskExecutor::SendSubBatchBuffers(
     const auto kernelCount = GetSendCountAttr(config_.attrs, "kernel_count");
     const auto quietCount = GetSendCountAttr(config_.attrs, "quiet_count");
     if (task != nullptr) {
-        const Metrics::BuiltinMetricUpdate preSendUpdate{
-            Metrics::MetricId::TransportTaskPreSendDuration,
-            std::chrono::duration<double>(std::chrono::steady_clock::now() - task->submittedAt)
-                .count()};
-        Metrics::UpdateBuiltinBatch(&preSendUpdate, 1);
+        const auto preSendAt = std::chrono::steady_clock::now();
+        const Metrics::BuiltinMetricUpdate preSendUpdates[] = {
+            {Metrics::MetricId::TransportTaskPreSendDuration,
+             std::chrono::duration<double>(preSendAt - task->submittedAt).count()},
+            {Metrics::MetricId::TransportTaskQueueDuration,
+             std::chrono::duration<double>(task->processingStartedAt - task->submittedAt).count()},
+            {Metrics::MetricId::TransportTaskProcessDuration,
+             std::chrono::duration<double>(preSendAt - task->processingStartedAt).count()},
+        };
+        Metrics::UpdateBuiltinBatch(preSendUpdates, std::size(preSendUpdates));
         task->NotifyPreSend();
     }
     const auto sendStatuses = transProvider_->Send(ioBatches, kernelCount, quietCount);

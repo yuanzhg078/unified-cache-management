@@ -193,6 +193,7 @@ bool TransportTaskExecutor::Execute(const TransportTaskPtr& task)
                                              std::memory_order_acq_rel)) {
         return false;
     }
+    task->processingStartedAt = std::chrono::steady_clock::now();
 
     std::vector<TransportSubBatchContext> subBatchContexts;
     auto status = PrepareTaskSubBatches(*task, subBatchContexts);
