@@ -160,6 +160,7 @@ void TransportTaskExecutor::SendSubBatchBuffers(
             std::chrono::duration<double>(std::chrono::steady_clock::now() - task->submittedAt)
                 .count()};
         Metrics::UpdateBuiltinBatch(&preSendUpdate, 1);
+        task->NotifyPreSend();
     }
     const auto sendStatuses = transProvider_->Send(ioBatches, kernelCount, quietCount);
     if (sendStatuses.size() != ioBatches.size()) {

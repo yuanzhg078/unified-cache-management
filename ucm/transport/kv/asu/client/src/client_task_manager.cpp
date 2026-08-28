@@ -97,6 +97,13 @@ void RecordClientTaskSendCompletion(const ClientTask& task)
     Metrics::UpdateBuiltinBatch(&update, 1);
 }
 
+void RecordClientTaskPreSend(const ClientTask& task)
+{
+    const Metrics::BuiltinMetricUpdate update{
+        Metrics::MetricId::ClientTaskPreSendDuration, SecondsSince(task.submittedAt)};
+    Metrics::UpdateBuiltinBatch(&update, 1);
+}
+
 }  // namespace
 
 bool ClientTask::Done() const
@@ -309,6 +316,8 @@ Status ClientTaskManager::BuildTransportTasks(const ClientTaskPtr& task)
     std::vector<KVBuffer>{}.swap(task->entries);
     std::vector<CacheKey>{}.swap(task->keys);
     task->remainingTransportTasks.store(task->transportTasks.size(), std::memory_order_release);
+    task->remainingTransportPreSendTasks.store(task->transportTasks.size(),
+                                                std::memory_order_release);
     task->remainingTransportSendTasks.store(task->transportTasks.size(), std::memory_order_release);
     return Status::OK();
 }
@@ -328,6 +337,14 @@ Status ClientTaskManager::DispatchTask(const ClientTaskPtr& task)
             auto task = clientTask.lock();
             if (!task) { return; }
             CompleteTransportTask(task, taskIndex, std::move(result));
+        };
+        transportTask->onPreSend = [clientTask] {
+            auto task = clientTask.lock();
+            if (!task) { return; }
+            if (task->remainingTransportPreSendTasks.fetch_sub(1, std::memory_order_acq_rel) ==
+                1) {
+                RecordClientTaskPreSend(*task);
+            }
         };
         transportTask->onSendComplete = [clientTask] {
             auto task = clientTask.lock();
