@@ -33,6 +33,8 @@ void PatchFakeBackendTransportConfig(UC::ASU::TransportConfig& config,
     config.attrs["sc"] = "true";
     config.attrs["fake_backend.path"] = fakeConfig.storePath;
     config.attrs["fake_backend.latency_ms"] = std::to_string(fakeConfig.latencyMs);
+    config.attrs["fake_backend.complete_immediately"] =
+        fakeConfig.completeImmediately ? "true" : "false";
     config.attrs["fake_backend.device_id"] = std::to_string(fakeBackendDeviceId);
     if (config.endpoints.empty()) {
         UC::ASU::AsuEndpoint endpoint;

@@ -438,7 +438,12 @@ FakeTransProviderConfig MakeFakeTransProviderConfig(const TransportConfig& confi
     return fakeConfig;
 }
 
-FakeTransProvider::FakeTransProvider(FakeTransProviderConfig config) : config_(std::move(config)) {}
+FakeTransProvider::FakeTransProvider(FakeTransProviderConfig config) : config_(std::move(config))
+{
+    if (config_.completeImmediately) {
+        UC_INFO("Fake provider immediate completion is enabled; requests bypass fake-backend execution");
+    }
+}
 
 Status FakeTransProvider::SetUpAclRuntime()
 {

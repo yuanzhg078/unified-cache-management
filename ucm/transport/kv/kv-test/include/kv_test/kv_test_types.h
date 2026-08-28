@@ -156,6 +156,7 @@ struct OutputConfig {
 struct KvTestFakeBackendConfig {
     std::string storePath;
     std::uint64_t latencyMs{1};
+    bool completeImmediately{false};
 };
 
 struct AsuRuntimeLibraryConfig {
