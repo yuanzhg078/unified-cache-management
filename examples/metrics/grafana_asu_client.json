@@ -216,7 +216,7 @@
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "fieldConfig": {"defaults": {"unit": "s", "decimals": 6}, "overrides": []},
       "gridPos": {"h": 8, "w": 24, "x": 0, "y": 50},
-      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
       "targets": [
         {"expr": "sum(rate(ucm:asu_client_task_enqueue_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / sum(rate(ucm:asu_client_task_enqueue_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval]))", "legendFormat": "client: API to enqueue", "refId": "A"},
         {"expr": "sum(rate(ucm:asu_client_task_queue_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / sum(rate(ucm:asu_client_task_queue_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval]))", "legendFormat": "client: queue wait", "refId": "B"},
@@ -240,7 +240,7 @@
   "schemaVersion": 39,
   "tags": ["asu", "kv-test", "standalone", "ucm"],
   "templating": {"list": [
-    {"current": {"selected": false, "text": "prometheus", "value": "prometheus"}, "hide": 0, "includeAll": false, "label": "Prometheus", "multi": false, "name": "DS_PROMETHEUS", "options": [], "query": "prometheus", "refresh": 1, "type": "datasource"},
+    {"current": {"selected": false, "text": "prometheus-asu", "value": "prometheus-asu"}, "hide": 0, "includeAll": false, "label": "Prometheus", "multi": false, "name": "DS_PROMETHEUS", "options": [], "query": "prometheus", "refresh": 1, "type": "datasource"},
     {"allValue": ".*", "current": {"selected": true, "text": "All", "value": "$__all"}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "includeAll": true, "label": "Source", "multi": true, "name": "source", "options": [], "query": {"qry": "label_values(ucm:asu_client_store_requests_total, source)", "refId": "A"}, "refresh": 1, "type": "query"},
     {"allValue": ".*", "current": {"selected": true, "text": "All", "value": "$__all"}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "includeAll": true, "label": "Model", "multi": true, "name": "model_name", "options": [], "query": {"qry": "label_values(ucm:asu_client_store_requests_total{source=~\"$source\"}, model_name)", "refId": "A"}, "refresh": 1, "type": "query"},
     {"allValue": ".*", "current": {"selected": true, "text": "All", "value": "$__all"}, "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}, "includeAll": true, "label": "Worker", "multi": true, "name": "worker_id", "options": [], "query": {"qry": "label_values(ucm:asu_client_store_requests_total{source=~\"$source\",model_name=~\"$model_name\"}, worker_id)", "refId": "A"}, "refresh": 1, "type": "query"}

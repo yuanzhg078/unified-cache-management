@@ -1,210 +1,212 @@
-# ASU kv-test Metrics 点位与 Grafana 解读
+# ASU kv-test Metrics 与 Grafana 使用手册
 
-本文只说明 ASU client 在 standalone / kv-test 模式下采集了哪些指标，以及在 Grafana 中如何解读这些指标。所有指标由 ASU client 埋点，名称均带有 Prometheus 前缀 `ucm:`。
+本文说明 `kv-test` 使用 standalone metrics 时，Grafana 每条曲线实际测量的代码路径。重点是明确：**图例名、Prometheus 指标、起点、终点，以及数值升高代表什么。**
 
-## 1. 点位总览
+指标带有 `ucm:` 前缀；Prometheus 的实际 exposition 名会转换为下划线形式，例如 `ucm:asu_client_task_duration_seconds` 会显示为 `ucm_asu_client_task_duration_seconds`。
 
-ASU client 对下列七种操作采集指标：
+## 1. 先看完整路径
 
-```text
-Query、Load、Store、BatchLoad、BatchStore、Delete、Wait
-```
-
-除 `Wait` 外，每种操作都有四类点位：请求次数、entry/key 数、错误次数、提交耗时。`Wait` 没有 entry/key 的概念，因此只有请求、错误和等待耗时。
-
-| 操作 | 请求次数 | entries / keys | 错误次数 | 耗时 |
-|---|---|---|---|---|
-| Query | `ucm:asu_client_query_requests_total` | `ucm:asu_client_query_entries_total` | `ucm:asu_client_query_errors_total` | `ucm:asu_client_query_submit_duration_seconds` |
-| Load | `ucm:asu_client_load_requests_total` | `ucm:asu_client_load_entries_total` | `ucm:asu_client_load_errors_total` | `ucm:asu_client_load_submit_duration_seconds` |
-| Store | `ucm:asu_client_store_requests_total` | `ucm:asu_client_store_entries_total` | `ucm:asu_client_store_errors_total` | `ucm:asu_client_store_submit_duration_seconds` |
-| BatchLoad | `ucm:asu_client_batch_load_requests_total` | `ucm:asu_client_batch_load_entries_total` | `ucm:asu_client_batch_load_errors_total` | `ucm:asu_client_batch_load_submit_duration_seconds` |
-| BatchStore | `ucm:asu_client_batch_store_requests_total` | `ucm:asu_client_batch_store_entries_total` | `ucm:asu_client_batch_store_errors_total` | `ucm:asu_client_batch_store_submit_duration_seconds` |
-| Delete | `ucm:asu_client_delete_requests_total` | `ucm:asu_client_delete_entries_total` | `ucm:asu_client_delete_errors_total` | `ucm:asu_client_delete_submit_duration_seconds` |
-| Wait | `ucm:asu_client_wait_requests_total` | — | `ucm:asu_client_wait_errors_total` | `ucm:asu_client_wait_duration_seconds` |
-
-此外还有 exporter 自身的两个点位：
+一次异步 KV 操作大致经过以下阶段：
 
 ```text
-ucm:asu_metrics_exporter_up
-ucm:asu_metrics_exporter_http_requests_total
+t0  kv-test 调用 client 的 *Async()
+ │
+ ├─ client：创建 ClientTask、登记 task、放入 client taskQueue_
+ ├─ client：等待 client worker
+ ├─ client worker：路由、拆分为一个或多个 TransportTask、逐个 transport->Submit()
+ ├─ transport：等待 transport executor
+ ├─ transport executor：构造 sub-batch / buffer，准备 provider Send 参数
+ ├─ provider->Send() 调用并返回
+ ├─ completion worker：收到并处理 CQE，完成每个 TransportTask
+ └─ client：聚合所有 child 的完成回调，完成 ClientTask
 ```
 
-`asu_metrics_exporter_up=1` 表示 standalone metrics exporter 正在运行；`http_requests_total` 是 `/metrics`、`/health` 等 HTTP 请求的累计服务次数。
+一个 `ClientTask` 可能拆成多个 `TransportTask`。因此 client task 的“全部 child 到达某点”表示**最后一个 child**到达该点，不是所有 child 时间的相加。
 
-## 2. 每类点位是什么意思
+## 2. Pre-Send Stage Latency Average
 
-### 2.1 `*_requests_total`
+面板 **Pre-Send Stage Latency Average** 是提交到真正调用 `Send()` 之前的拆分图。它使用 Histogram 的 `sum / count`，每个点是查询窗口内的滚动平均值，单位是秒（Grafana 显示为 µs/ms）。
 
-这是某种 ASU client 操作成功提交或失败返回的总调用次数。例如：
+| Grafana 图例 | 指标 | 起点 → 终点 | 数值高通常说明 |
+|---|---|---|---|
+| `client: API to enqueue` | `ucm:asu_client_task_enqueue_duration_seconds` | 进入 `*Async()` → `ClientTask` 放入 client `taskQueue_` | API 入口同步工作慢：参数/快照检查、创建任务、复制 entry/key 描述符、MR 映射、`taskManager_.Submit()` 或 queue mutex 竞争。不是 timeout 等待。 |
+| `client: queue wait` | `ucm:asu_client_task_queue_duration_seconds` | 放入 client `taskQueue_` → client worker 取出 | client worker 忙，client task 在队列堆积。 |
+| `client: worker process to transport-submit` | `ucm:asu_client_task_process_duration_seconds` | client worker 取出 → 此 ClientTask 最后一次 `transport->Submit()` 返回 | client 的路由、按 ASU 拆分、创建 child、填回调、循环调用 `transport->Submit()` 慢。**终点是 Submit 返回，不等 provider Send。** |
+| `transport: queue wait` | `ucm:asu_transport_task_queue_duration_seconds` | client 即将调用 `transport->Submit()` → transport executor 开始执行该 TransportTask | transport executor 忙，TransportTask 在其队列积压。每个 TransportTask 各记一次。 |
+| `transport: executor process to pre-Send` | `ucm:asu_transport_task_process_duration_seconds` | transport executor 开始执行 → 即将调用 provider `Send()` | sub-batch/buffer 构造、连接或请求属性准备等 transport 内部处理慢。 |
+| `total: transport task to pre-Send` | `ucm:asu_transport_task_pre_send_duration_seconds` | client 分发该 TransportTask（Submit 前）→ 即将调用 provider `Send()` | 即 transport queue wait + transport executor process；每个 TransportTask 一条样本。 |
+| `total: client task to all pre-Send` | `ucm:asu_client_task_pre_send_duration_seconds` | 进入 `*Async()` → 该 ClientTask 的**所有** TransportTask 都到达 provider `Send()` 前 | 整个提交前路径慢；多 child 时由最慢 child 决定。 |
+
+### 一个 ClientTask 只拆成一个 TransportTask 时
+
+下面关系可作为数量级校验，微秒级有少量误差正常：各指标独立取时钟、不同图可能使用相邻但不完全相同的滚动窗口。
 
 ```text
-asu_client_store_requests_total = 1000
+client task to all pre-Send
+≈ client: API to enqueue
++ client: queue wait
++ client: worker process to transport-submit
++ transport: queue wait
++ transport: executor process to pre-Send
+
+transport task to pre-Send
+≈ transport: queue wait
++ transport: executor process to pre-Send
 ```
 
-表示当前进程启动以来共执行了 1,000 次 Store 提交。
+如果拆出了多个 TransportTask，不能把“client 总时延”直接减去“transport 平均时延”。client 总时延是到最慢 child 的墙钟时间；transport 面板是所有 child 的样本平均值。
 
-它是 Counter，只会增加。Grafana 一般不直接看其绝对值，而是使用 `rate()` 显示每秒请求数（QPS）。
+## 3. Send、completion 与完整 task 时延
 
-### 2.2 `*_entries_total`
+| Grafana 图例/含义 | 指标 | 起点 → 终点 | 应怎样看 |
+|---|---|---|---|
+| `client task to all Send return` | `ucm:asu_client_task_send_duration_seconds` | `*Async()` API 入口 → 所有 child 的 provider `Send()` 都返回 | 包含前文全部 pre-Send 路径，及每个 child 的 Send 调用本身；多 child 时由最后返回的 child 决定。 |
+| `transport task to Send return` | `ucm:asu_transport_task_send_duration_seconds` | client 分发该 TransportTask（Submit 前）→ 该 task 的 provider `Send()` 返回 | 包含 transport 队列、executor 处理与 Send 调用。它不是“纯 Send 函数耗时”。 |
+| `transport task: Send return to completion` | `ucm:asu_transport_task_completion_duration_seconds` | 对该 TransportTask 的 `Send()` 返回 → completion worker 收到/处理 CQE 并触发 transport 完成回调 | Send 已返回后仍慢，重点检查 CQE、provider/后端返回与 completion 路径。一个 TransportTask 的全部 sub-batch 完成后才算完成。 |
+| `client task end-to-end` | `ucm:asu_client_task_duration_seconds` | `*Async()` API 入口 → 所有 TransportTask 完成回调被 client 聚合 | 一个 ClientTask 的完整本地端到端时延；包含 Send 前、Send、completion 与最终聚合。 |
 
-这是对应操作累计处理的 entry 或 key 数。单条 Store/Load 通常是 1；BatchStore/BatchLoad 中它可以远大于请求数。
+常用诊断：
 
 ```text
-batch_store_requests_total = 100
-batch_store_entries_total  = 10000
+client task to all pre-Send 高
+  → client/transport 的排队、路由、拆分或准备阶段慢
+
+transport task to Send return 高，但 transport task to pre-Send 正常
+  → provider Send 调用本身或其同步阻塞部分慢
+
+Send return to completion 高
+  → Send 已完成，慢在 CQE、后端返回、poll/completion worker
+
+client end-to-end 高，而 completion 不高
+  → 对照 client task to all Send return，检查 client 侧的聚合或多 child 最慢分支
 ```
 
-表示执行了 100 个 BatchStore 请求，平均每批约 100 个 entry：
+这些都是 client/transport 进程视角的时延，不能替代 ASU 后端服务自己的队列、执行和存储时延；后端要单独暴露 metrics。
 
-```text
-平均 batch 大小 = entries_total / requests_total = 100
-```
+## 4. 接口级 submit / Wait 时延
 
-### 2.3 `*_errors_total`
+`Task Pipeline` 是内部 task 路径；接口级 Histogram 回答的是“调用 API 到异步提交返回有多快”。
 
-这是该操作的累计失败次数。它也是 Counter。
-
-```text
-错误率 = rate(errors_total) / rate(requests_total)
-```
-
-正常情况下错误率应接近 0。错误数上升时，先看哪个操作的 `errors_total` 增长，再结合 kv-test 日志定位具体失败原因。
-
-### 2.4 `*_submit_duration_seconds`
-
-这是 Histogram，记录各操作的 **客户端提交耗时**。
-
-对于 Query、Load、Store、BatchLoad、BatchStore、Delete：
-
-```text
-进入 ASU client 方法
-  → 调用 SubmitAsync
-  → SubmitAsync 返回
-```
-
-因此它衡量的是 ASU client 将请求提交给底层 transport 的开销；**不是** 服务端处理结束或数据真正落盘的端到端耗时。
-
-`asu_client_wait_duration_seconds` 的含义不同：它记录 `Wait` 的实际等待时长，更接近异步请求等待 completion 返回的时间。
-
-### 2.5 Task 与 transport 分段指标
-
-除接口提交和 `Wait` 外，standalone metrics 还提供 client 内部任务路径的聚合指标：
-
-| 指标 | 含义 |
-|---|---|
-| `ucm:asu_client_task_pre_send_duration_seconds` | 从 `*Async()` API 入口到该 client task 拆出的**全部** transport task 都抵达实际 provider `Send()` 调用前。包含 client 执行队列等待、路由、拆分、逐个入 transport 队列，以及 transport executor 的排队和发送准备；每个 client task 只记录一次。 |
-| `ucm:asu_client_task_send_duration_seconds` | 从 `*Async()` API 入口到它拆出的所有 transport task 的 `Send()` 调用返回，包含 client task 创建、排队、路由与 transport 入队。 |
-| `ucm:asu_transport_task_pre_send_duration_seconds` | 单个 transport task 从 client 分发到实际 provider `Send()` 前，包含 transport 队列、executor 调度、sub-batch 准备、buffer 构造与 Send 属性准备。 |
-| `ucm:asu_transport_task_send_duration_seconds` | 单个 transport task 从 client 分发到实际 `Send()` 返回，包含 transport 队列与请求构造。 |
-| `ucm:asu_transport_task_completion_duration_seconds` | 单个 transport task 从 `Send()` 返回到 completion worker 处理 CQE、触发完成回调的时间。 |
-| `ucm:asu_client_task_duration_seconds` | 从 `*Async()` API 入口到所有 transport task 回调聚合完成的完整 task 端到端时间。 |
-
-这些指标仍由 client/transport 进程观测，不能代替 ASU 服务端的真实执行耗时。服务端队列和存储执行耗时需要由 ASU 后端单独暴露 metrics。
-
-## 3. Histogram 怎么看
-
-每个 `*_duration_seconds` 在 Prometheus 中会展开成三组序列：
-
-```text
-..._bucket  # 各延迟桶内的累计观测数
-..._sum     # 全部耗时之和，单位秒
-..._count   # 总观测次数
-```
-
-例子：
-
-```text
-asu_client_load_submit_duration_seconds_sum   = 3.91e-06
-asu_client_load_submit_duration_seconds_count = 1
-```
-
-说明记录到一次 Load 提交，耗时约 3.91 微秒。
-
-Grafana 中不直接画所有 bucket，因为 bucket 过多且可读性差；应使用 bucket 计算延迟分位数：
-
-```text
-P50：典型请求的提交耗时
-P95：95% 请求不超过的提交耗时
-P99：长尾请求的提交耗时
-```
-
-判断原则：
-
-| 现象 | 含义 |
-|---|---|
-| P50、P95、P99 接近 | 提交延迟分布稳定 |
-| P99 明显高于 P50 | 存在长尾，少量请求提交明显更慢 |
-| P50/P95/P99 同时上升 | 底层 transport、线程调度或资源竞争整体变慢 |
-| `*_count` 不增长 | 该操作没有执行，或对应埋点路径没有走到 |
-
-## 4. Grafana 模板中的面板与点位对应关系
-
-Dashboard 模板：`examples/metrics/grafana_asu_client.json`。
-
-| Grafana 面板 | 使用的点位 | 看什么 |
+| 图例类别 | 指标 | 起点 → 终点 |
 |---|---|---|
-| ASU Metrics Exporter Up | `asu_metrics_exporter_up` | 是否成功启动并保持运行。值应为 1 |
-| Submission Rate by Operation | 所有 `*_requests_total`（不含 Wait） | 每个操作的提交 QPS；用于比较读写、批量和删除负载 |
-| Entry Throughput | 所有 `*_entries_total`（不含 Wait） | 每秒处理的 entry/key 数；Batch 操作可据此判断实际批量大小 |
-| Store / Load Submit Latency Quantiles | Store / Load 的 `*_submit_duration_seconds_bucket` | Store、Load 的 P50/P95/P99 提交延迟 |
-| Batch / Wait Latency Quantiles | BatchStore、BatchLoad、Wait 的 `*_duration_seconds_bucket` | 批量提交延迟和 completion 等待长尾 |
-| Query / Delete Submit Latency Quantiles | Query、Delete 的 `*_submit_duration_seconds_bucket` | Query、Delete 的 P50/P95/P99 提交延迟 |
-| Error Rate by Operation | 所有 `*_errors_total`、`*_requests_total` | 各操作错误率；应优先关注持续非零或突增 |
-| Wait and Exporter Activity | Wait 请求/错误、`asu_metrics_exporter_http_requests_total` | completion 等待负载和 exporter 被读取情况 |
-| Raw Request Counters | 所有 `*_requests_total` | 原始累计请求数，用于核验各操作是否实际执行 |
-| Raw Entry Counters | 所有 `*_entries_total` | 原始累计 entry/key 数，用于核验批量语义 |
-| Raw Error Counters | 所有 `*_errors_total` | 原始累计错误数，用于确认具体失败的操作 |
-| Raw Histogram Observation Counts | 所有 `*_duration_seconds_count` | 每个耗时 Histogram 是否记录到了样本；通常应与对应请求次数一致 |
-| Task Pipeline Latency P99 / P50 | 四段 task pipeline 的 duration buckets | 对照 P50 和 P99，定位延迟在 client task 到 Send、transport 到 Send、CQE completion，还是最终 task 聚合阶段。 |
-| Task Pipeline Latency Average | 四段 duration 的 sum / count | 查看各阶段平均耗时，辅助解释分位数曲线。 |
-| Task Pipeline Observation Counts | 四段 duration 的 `_count` | 验证每一段都有实际样本；短命 bench 不足以计算稳定分位数时优先看此面板。 |
+| Query submit | `ucm:asu_client_query_submit_duration_seconds` | `QueryAsync()` 进入 → `SubmitAsync` 返回 |
+| Load submit | `ucm:asu_client_load_submit_duration_seconds` | `LoadAsync()` 进入 → `SubmitAsync` 返回 |
+| Store submit | `ucm:asu_client_store_submit_duration_seconds` | `StoreAsync()` 进入 → `SubmitAsync` 返回 |
+| BatchLoad submit | `ucm:asu_client_batch_load_submit_duration_seconds` | `BatchLoadAsync()` 进入 → `SubmitAsync` 返回 |
+| BatchStore submit | `ucm:asu_client_batch_store_submit_duration_seconds` | `BatchStoreAsync()` 进入 → `SubmitAsync` 返回 |
+| Delete submit | `ucm:asu_client_delete_submit_duration_seconds` | `DeleteAsync()` 进入 → `SubmitAsync` 返回 |
+| Wait | `ucm:asu_client_wait_duration_seconds` | 进入 `Wait()` → Wait 返回 |
 
-## 5. 看图时的常见判断
+`*_submit_duration_seconds` 不等后端实际完成，通常只是异步 API 交付 task id/提交工作的耗时。`Wait` 才是调用方等待 task completion 的时长，但它也只覆盖该次 `Wait()` 调用：若 task 在 Wait 前就已完成，Wait 可以很短。
 
-### Store / Load
+## 5. 非时延指标
 
-```text
-Store QPS 上升，Store entries QPS 同比例上升
-→ 单条 Store 为主，平均每请求约一个 entry
+除 `Wait` 外，Query、Load、Store、BatchLoad、BatchStore、Delete 都有以下三类 Counter：
 
-BatchStore entries QPS 远高于 BatchStore 请求 QPS
-→ 批处理正在生效；两者之比约为平均 batch 大小
+| 类别 | 形式 | 意义 | 常用 Grafana / PromQL 解读 |
+|---|---|---|---|
+| 请求数 | `ucm:asu_client_<operation>_requests_total` | 对该异步接口的调用次数 | `rate(...[$__rate_interval])` 是请求/s。 |
+| entry/key 数 | `ucm:asu_client_<operation>_entries_total` | 该操作涉及的 entry 或 key 总数 | `entries rate / requests rate` 是平均 batch 大小；单条 Store/Load 通常接近 1。 |
+| 错误数 | `ucm:asu_client_<operation>_errors_total` | 该操作失败返回的累计次数 | `rate(errors) / rate(requests)` 是错误率。持续非零或突增应结合 kv-test 日志排查。 |
 
-Store P99 上升，但 Wait P99 没上升
-→ 更可能是提交侧/transport 入队侧变慢
-
-Store submit P99 平稳，但 Wait P99 上升
-→ 请求提交正常，完成路径或后端处理变慢
-```
-
-### 错误
+`Wait` 没有 entries 指标，只有：
 
 ```text
-errors_total 增长且 requests_total 同时增长
-→ 有真实业务请求失败，应看对应 kv-test/ASU 日志
-
-errors_total 不增长，但 Error Rate 面板偶尔出现空值
-→ 请求量为零时没有可计算的 rate，通常不是错误
+ucm:asu_client_wait_requests_total
+ucm:asu_client_wait_errors_total
+ucm:asu_client_wait_duration_seconds
 ```
 
-### 单次 `store --check`
+例如 `client_task_complete` 或 task completion 语义的计数，应该按 **task 数**理解，不是 BatchStore 内 entry 的数量；要看 entry 数应使用对应 operation 的 `*_entries_total`。
 
-`store --check` 会 Store 后再 Load 回读验证。因此原始 Counter 常见预期为：
+### Exporter 自身
+
+| 指标 | 含义 | 注意 |
+|---|---|---|
+| `ucm:asu_metrics_exporter_up` | exporter 在最近一次暴露 metrics 时写出的内部状态 | 它最后一次抓到 1 后，短命 `kv-test` 退出也可能仍显示 1；不能作为实时进程存活判断。 |
+| `ucm:asu_metrics_exporter_http_requests_total` | exporter HTTP 请求累计次数 | 可确认 `/metrics` / `/health` 是否曾被访问；不是业务请求数。 |
+| Prometheus 原生 `up{job="...",instance="..."}` | Prometheus 当前是否能 scrape 到目标 | 实时存活看这个：1 可抓取，0 表示目标仍配置但当前不可达。 |
+
+## 6. Histogram、平均值、P50/P99 是什么
+
+每个 `*_duration_seconds` 都是 Prometheus Histogram，会导出：
 
 ```text
-store_requests_total = 1
-store_entries_total  = 1
-load_requests_total  = 1
-load_entries_total   = 1
-store_errors_total   = 0
-load_errors_total    = 0
+..._bucket  各延迟阈值以内的累计样本数
+..._sum     全部样本耗时总和（秒）
+..._count   全部样本数量
 ```
 
-短命的单次进程常没有连续的 QPS 曲线，因为 `rate()` 至少需要多个采样点。此时优先看 Raw Request Counters、Raw Entry Counters、Raw Error Counters、Raw Histogram Observation Counts；持续 `kv-test bench` 才适合分析 QPS、P95、P99 曲线。
+Dashboard 的两种时延图不是同一种统计：
 
-## 6. 标签
+| 面板 | 算法 | 回答的问题 |
+|---|---|---|
+| `Task Pipeline Latency P99 / P50` | `histogram_quantile()` 读取 `_bucket` | P50 是典型 task 多快；P99 是最慢约 1% task 有多慢。P99 明显高于 P50，说明有长尾/偶发排队。 |
+| `Task Pipeline Latency Average`、`Pre-Send Stage Latency Average` | `rate(_sum) / rate(_count)` | 查询窗口内所有样本的平均时延；容易被少量极慢或极快样本拉动，不能替代 P99。 |
+| `Task Pipeline Observation Counts` | `_count` | 当前窗口内有多少样本。count 不增时，平均与分位数应视为无数据，而不是 0 时延。 |
 
-每条 ASU standalone 指标带有：
+平均值的标准表达式为：
+
+```promql
+sum(rate(ucm_asu_client_task_duration_seconds_sum[$__rate_interval]))
+/
+sum(rate(ucm_asu_client_task_duration_seconds_count[$__rate_interval]))
+```
+
+分位数例如 P99：
+
+```promql
+histogram_quantile(0.99,
+  sum by (le) (
+    rate(ucm_asu_client_task_duration_seconds_bucket[$__rate_interval])
+  )
+)
+```
+
+Grafana 时间范围不是“一轮 bench 的平均范围”。每个折线点使用 `$__rate_interval` 的**滚动窗口**；该窗口通常至少约为 Prometheus scrape interval 的 4 倍。使用 scrape=2s 时常见窗口约为 8s 或更大。请同时查看 Observation Counts，确认该滚动窗口确实包含本轮样本。
+
+## 7. Dashboard 面板对应关系
+
+模板位于 `examples/metrics/grafana_asu_client.json`。
+
+| 面板 | 主要指标 | 用途 |
+|---|---|---|
+| `Pre-Send Stage Latency Average` | 本文第 2 节 7 个指标的 `_sum/_count` | 优先定位 API 入队、client 队列、client worker、transport 队列还是 transport 准备阶段慢。 |
+| `Task Pipeline Latency P99 / P50` | client pre-Send、transport pre-Send、client Send、transport Send、transport completion、client end-to-end 的 `_bucket` | 看典型与长尾；应同时展示 client 与 transport，避免只看 client Send 而无法判断队列或发送阶段。 |
+| `Task Pipeline Latency Average` | 上述 pipeline 指标的 `_sum/_count` | 与 P50/P99 对照，查看整体平均成本。 |
+| `Task Pipeline Observation Counts` | pipeline 的 `_count` | 检查每一段是否真的有点位；短命 bench 样本少时尤其重要。 |
+| `Submission Rate by Operation` | 各操作 `*_requests_total` | 请求 QPS。 |
+| `Entry Throughput` | 各操作 `*_entries_total` | entry/key 吞吐；请求 QPS 的倍数反映 batch 大小。 |
+| `Store / Load`、`Batch / Wait`、`Query / Delete` Submit Latency Quantiles | 对应接口时延 Histogram 的 `_bucket` | API 提交耗时或 Wait 的长尾。不要把 submit 图误当端到端完成时延。 |
+| `Error Rate by Operation` | `*_errors_total / *_requests_total` | 失败比例。 |
+| `Raw ... Counters` / `Raw Histogram Observation Counts` | Counter 与 `_count` 原始值 | 核验短测是否真的写入过指标。 |
+
+## 8. kv-test 短测和实时观察建议
+
+高并发 bench 的实用组合：
+
+```properties
+metrics.aggregation_interval_ms=1000   # 1000 推荐；更在意低开销可用 2000
+metrics.shutdown_grace_ms=30000        # 短命 bench 结束后留给 Prometheus 最后一抓
+```
+
+并配合：Prometheus scrape interval = 2s，Grafana refresh = 5s，Grafana datasource 的 Scrape interval 也填 2s。
+
+`aggregation_interval_ms` 不会采样或丢掉每次 Observe：每个写点先累积在写入线程的 buffer，聚合周期只影响多久合并到 exporter snapshot。它只影响面板新鲜度与极小的周期性聚合开销。若设置为 2s、scrape 为 2s、Grafana 刷新 5s，图上看到最新点可能有数秒延迟是正常的。
+
+每次新启动 `kv-test` 是新进程，Counter 会从 0 重新开始；Grafana 不会自动删除 Prometheus 中旧进程的历史样本。重新测一轮时，选择测量开始后的短时间范围，并用 `source`、`model_name`、`worker_id` 筛选。若多轮 bench 使用完全相同的标签，曲线会按时间连续显示；要并排比较不同并发/批大小，应给每轮使用不同 `worker_id` 或 `source`，或者另行增加 run 标签。
+
+## 9. 快速排障顺序
+
+1. 先看 `Task Pipeline Observation Counts` 是否增长，避免把“无样本”误判为 0 时延。
+2. 看 `Pre-Send Stage Latency Average`：先确定慢在 client 入队、client queue、client worker、transport queue 或 transport executor。
+3. 再看 Pipeline P50/P99：P99 突增而平均正常，通常是偶发排队；P50/P99 同时升高，通常是整体饱和或处理变慢。
+4. 若 pre-Send 正常但 Send return 高，检查 provider Send；若 completion 高，检查 CQE、后端返回和 completion worker。
+5. 最后结合 `Error Rate`、QPS、entry 吞吐与 kv-test 日志，判断是否为错误、限流或实际负载变化。
+
+## 10. 标签
+
+每条 standalone 指标带有：
 
 ```text
 source      # 例如 kv-test
@@ -212,4 +214,4 @@ model_name  # 例如 standalone
 worker_id   # 例如 asu-0
 ```
 
-Grafana 顶部的 Source、Model、Worker 变量正是这些标签。多个 kv-test 实例、多个 ASU worker 同时写 Prometheus 时，先用标签筛选再判断数值，避免把不同实例的 Counter 或延迟聚合在一起。
+Grafana 顶部的 Source、Model、Worker 变量就是这些标签。多实例同时写入时先筛选标签，避免把不同进程的 Counter、Histogram 混合。`bench.concurrency`、`bench.batch_size` 等参数当前不是 metrics label；同一标签下的不同测试轮次不能由 Dashboard 自动区分。
