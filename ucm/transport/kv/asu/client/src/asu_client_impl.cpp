@@ -28,9 +28,9 @@
 #include <limits>
 #include <thread>
 #include <utility>
-#include "asu_transport/types.h"
 #include "asu_metrics/metric_names.h"
 #include "asu_metrics/metrics.h"
+#include "asu_transport/types.h"
 #include "client_config_parser.h"
 #include "client_router_config.h"
 #include "kv_common/router.h"
@@ -85,21 +85,22 @@ void RecordSubmit(AsuOpType opType, std::size_t entryCount, const Status& status
     if (!timer.enabled) { return; }
     SubmitMetricIds ids{};
     if (!GetSubmitMetricIds(opType, ids)) { return; }
-    const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - timer.begin);
+    const auto elapsed =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - timer.begin);
     Metrics::BuiltinMetricUpdate updates[] = {
-        {ids.requests, 1.0},
-        {ids.entries, static_cast<double>(entryCount)},
-        {ids.duration, elapsed.count()},
+        {ids.requests, 1.0                            },
+        {ids.entries,  static_cast<double>(entryCount)},
+        {ids.duration, elapsed.count()                },
     };
     if (status.ok()) {
         Metrics::UpdateBuiltinBatch(updates, std::size(updates));
         return;
     }
     Metrics::BuiltinMetricUpdate failedUpdates[] = {
-        {ids.requests, 1.0},
-        {ids.entries, static_cast<double>(entryCount)},
-        {ids.errors, 1.0},
-        {ids.duration, elapsed.count()},
+        {ids.requests, 1.0                            },
+        {ids.entries,  static_cast<double>(entryCount)},
+        {ids.errors,   1.0                            },
+        {ids.duration, elapsed.count()                },
     };
     Metrics::UpdateBuiltinBatch(failedUpdates, std::size(failedUpdates));
 }
@@ -152,6 +153,13 @@ Status AsuClientImpl::Init(const AsuClientConfig& config)
         return Status::Error(StatusCode::INVALID_ARGUMENT,
                              "at least one transport config is required");
     }
+    const auto maxInflightTasks =
+        std::max_element(config.transportConfigs.begin(), config.transportConfigs.end(),
+                         [](const TransportConfig& lhs, const TransportConfig& rhs) {
+                             return lhs.maxInflightTasks < rhs.maxInflightTasks;
+                         });
+    const auto queueDepth =
+        std::max<std::size_t>(2, static_cast<std::size_t>(maxInflightTasks->maxInflightTasks));
 
     GlobalView view;
     auto status = viewServer_->GetGlobalView(view);
@@ -179,10 +187,8 @@ Status AsuClientImpl::Init(const AsuClientConfig& config)
         return status;
     }
 
-    {
-        std::lock_guard<std::mutex> lock{taskQueueMu_};
-        stopWorker_ = false;
-    }
+    taskQueue_.Setup(queueDepth + 1);
+    stopWorker_.store(false, std::memory_order_release);
     worker_ = std::thread(&AsuClientImpl::WorkerLoop, this);
     snapshot_ = std::move(nextSnapshot);
     initialized_ = true;
@@ -200,11 +206,14 @@ Status AsuClientImpl::Shutdown()
     JoinBackgroundRefresh();
 
     {
-        std::lock_guard<std::mutex> lock{taskQueueMu_};
-        stopWorker_ = true;
+        std::lock_guard<std::mutex> lock{producerMu_};
+        if (worker_.joinable()) {
+            taskQueue_.Push(ClientTaskPtr{});
+            worker_.join();
+        } else {
+            stopWorker_.store(true, std::memory_order_release);
+        }
     }
-    taskQueueCv_.notify_all();
-    if (worker_.joinable()) { worker_.join(); }
 
     std::shared_ptr<ViewSnapshot> snapshot;
     std::vector<std::shared_ptr<AsuTransport>> retiredTransports;
@@ -315,15 +324,15 @@ Status AsuClientImpl::Wait(TaskId taskId, std::uint64_t timeoutMs, TaskResult& r
         const auto elapsed =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - timer.begin);
         Metrics::BuiltinMetricUpdate updates[] = {
-            {Metrics::MetricId::WaitRequests, 1.0},
+            {Metrics::MetricId::WaitRequests, 1.0            },
             {Metrics::MetricId::WaitDuration, elapsed.count()},
         };
         if (status.ok() && result.status.ok()) {
             Metrics::UpdateBuiltinBatch(updates, std::size(updates));
         } else {
             Metrics::BuiltinMetricUpdate failedUpdates[] = {
-                {Metrics::MetricId::WaitRequests, 1.0},
-                {Metrics::MetricId::WaitErrors, 1.0},
+                {Metrics::MetricId::WaitRequests, 1.0            },
+                {Metrics::MetricId::WaitErrors,   1.0            },
                 {Metrics::MetricId::WaitDuration, elapsed.count()},
             };
             Metrics::UpdateBuiltinBatch(failedUpdates, std::size(failedUpdates));
@@ -445,8 +454,7 @@ Status AsuClientImpl::RegisterRegionsOnce(const std::vector<MemoryRegion>& regio
 }
 
 Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>& entries,
-                                  TaskId& taskId,
-                                  std::chrono::steady_clock::time_point taskStart)
+                                  TaskId& taskId, std::chrono::steady_clock::time_point taskStart)
 {
     auto snapshot = GetSnapshot();
     if (!snapshot || !snapshot->router || snapshot->transports.empty()) {
@@ -489,26 +497,28 @@ Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>&
     }
 
     {
-        std::lock_guard<std::mutex> lock{taskQueueMu_};
-        if (stopWorker_) {
+        std::lock_guard<std::mutex> lock{producerMu_};
+        if (stopWorker_.load(std::memory_order_acquire)) {
             (void)taskManager_.Remove(taskId);
             taskId = kInvalidTaskId;
             return NotInitialized();
         }
         rawCtx->enqueuedAt = std::chrono::steady_clock::now();
-        taskQueue_.emplace_back(std::move(rawCtx));
+        if (!taskQueue_.TryPush(std::move(rawCtx))) {
+            (void)taskManager_.Remove(taskId);
+            taskId = kInvalidTaskId;
+            return Status::Error(StatusCode::RESOURCE_BUSY, "client task queue is full");
+        }
     }
     const Metrics::BuiltinMetricUpdate enqueueUpdate{
         Metrics::MetricId::ClientTaskEnqueueDuration,
         std::chrono::duration<double>(std::chrono::steady_clock::now() - taskStart).count()};
     Metrics::UpdateBuiltinBatch(&enqueueUpdate, 1);
-    taskQueueCv_.notify_one();
     return Status::OK();
 }
 
 Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<CacheKey>& keys,
-                                  TaskId& taskId,
-                                  std::chrono::steady_clock::time_point taskStart)
+                                  TaskId& taskId, std::chrono::steady_clock::time_point taskStart)
 {
     auto snapshot = GetSnapshot();
     if (!snapshot || !snapshot->router || snapshot->transports.empty()) {
@@ -540,36 +550,32 @@ Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<CacheKey>&
     }
 
     {
-        std::lock_guard<std::mutex> lock{taskQueueMu_};
-        if (stopWorker_) {
+        std::lock_guard<std::mutex> lock{producerMu_};
+        if (stopWorker_.load(std::memory_order_acquire)) {
             (void)taskManager_.Remove(taskId);
             taskId = kInvalidTaskId;
             return NotInitialized();
         }
         rawCtx->enqueuedAt = std::chrono::steady_clock::now();
-        taskQueue_.emplace_back(std::move(rawCtx));
+        if (!taskQueue_.TryPush(std::move(rawCtx))) {
+            (void)taskManager_.Remove(taskId);
+            taskId = kInvalidTaskId;
+            return Status::Error(StatusCode::RESOURCE_BUSY, "client task queue is full");
+        }
     }
     const Metrics::BuiltinMetricUpdate enqueueUpdate{
         Metrics::MetricId::ClientTaskEnqueueDuration,
         std::chrono::duration<double>(std::chrono::steady_clock::now() - taskStart).count()};
     Metrics::UpdateBuiltinBatch(&enqueueUpdate, 1);
-    taskQueueCv_.notify_one();
     return Status::OK();
 }
 
 void AsuClientImpl::WorkerLoop()
 {
-    while (true) {
-        ClientTaskPtr ctx;
-        {
-            std::unique_lock<std::mutex> lock{taskQueueMu_};
-            taskQueueCv_.wait(lock, [this] { return stopWorker_ || !taskQueue_.empty(); });
-            if (taskQueue_.empty()) {
-                if (stopWorker_) { return; }
-                continue;
-            }
-            ctx = std::move(taskQueue_.front());
-            taskQueue_.pop_front();
+    taskQueue_.ConsumerLoop(stopWorker_, [this](ClientTaskPtr ctx) {
+        if (!ctx) {
+            stopWorker_.store(true, std::memory_order_release);
+            return;
         }
         ctx->processingStartedAt = std::chrono::steady_clock::now();
         const Metrics::BuiltinMetricUpdate queueUpdate{
@@ -578,7 +584,7 @@ void AsuClientImpl::WorkerLoop()
         Metrics::UpdateBuiltinBatch(&queueUpdate, 1);
         auto status = taskManager_.Process(ctx);
         if (IsRefreshNeeded(status)) { RequestBackgroundRefresh(); }
-    }
+    });
 }
 
 Status AsuClientImpl::UnregisterRegions(const std::vector<MRHandle>& handles)
