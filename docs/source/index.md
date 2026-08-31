@@ -60,6 +60,7 @@ user-guide/prefix-cache/index
 user-guide/sparse-attention/index
 user-guide/pd-disaggregation/index
 user-guide/metrics/metrics
+user-guide/metrics/asu_metrics_architecture_zh
 user-guide/rerope/rerope
 :::
 
@@ -67,6 +68,7 @@ user-guide/rerope/rerope
 :caption: Developer Guide
 :maxdepth: 1
 developer-guide/contribute
+developer-guide/asu_metrics_qcc_improvement_proposal_zh
 developer-guide/deepdive_ucm
 developer-guide/add_metrics
 developer-guide/extending_store

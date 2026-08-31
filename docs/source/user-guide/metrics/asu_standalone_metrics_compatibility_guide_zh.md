@@ -1,5 +1,7 @@
 # ASU 独立运行时的 Metrics 框架与 UCM 兼容方案
 
+> 本文保留为详细实现和演进记录。当前架构、时序与 standalone/UCM 兼容契约请以[《ASU Metrics 设计：Standalone 与 UCM 统一兼容方案》](asu_metrics_architecture_zh.md)为准。
+
 ## 1. 目标与结论
 
 ASU 不经过 vLLM、由 `kv-test` 直接拉起时，是否复用 UCM 的 C++ metrics，取决于 `kv-test` 的构建和运行包是否允许携带 UCM 依赖：
