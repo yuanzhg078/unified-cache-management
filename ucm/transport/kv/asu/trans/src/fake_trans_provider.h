@@ -39,8 +39,8 @@ namespace UC::ASU {
 
 struct FakeTransProviderConfig {
     std::string storePath{"./asu-fake-backend-store"};
-    std::uint64_t latencyMs{1};
     bool completeImmediately{false};
+    std::uint64_t latencyUs{1000};
     std::int32_t deviceId{0};
     std::size_t workerThreads{4};
 };

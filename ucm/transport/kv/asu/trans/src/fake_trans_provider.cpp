@@ -309,9 +309,9 @@ FakeTransProviderConfig MakeFakeTransProviderConfig(const TransportConfig& confi
     if (pathIter != config.attrs.end() && !pathIter->second.empty()) {
         fakeConfig.storePath = pathIter->second;
     }
-    auto latencyIter = config.attrs.find("fake_backend.latency_ms");
+    auto latencyIter = config.attrs.find("fake_backend.latency_us");
     if (latencyIter != config.attrs.end()) {
-        fakeConfig.latencyMs = static_cast<std::uint64_t>(std::stoull(latencyIter->second));
+        fakeConfig.latencyUs = static_cast<std::uint64_t>(std::stoull(latencyIter->second));
     }
     auto immediateIter = config.attrs.find("fake_backend.complete_immediately");
     if (immediateIter != config.attrs.end()) {
@@ -334,7 +334,9 @@ FakeTransProvider::FakeTransProvider(FakeTransProviderConfig config)
       workerPool_(std::make_unique<WorkerPool>(*this, config_.workerThreads))
 {
     if (config_.completeImmediately) {
-        UC_INFO("Fake provider immediate completion is enabled; requests bypass fake-backend execution");
+        UC_INFO(
+            "Fake provider immediate completion is enabled; requests bypass fake-backend "
+            "execution");
     }
     if (SetupDeviceRuntime().ok()) { stream_ = device_.MakeStream(); }
 }
@@ -602,8 +604,8 @@ Status FakeTransProvider::CompleteExist(AsuId asuId, const std::uint32_t* reques
 Status FakeTransProvider::CompleteFakeBackendRequest(const void* sendBuffer, std::uint64_t len,
                                                      std::vector<std::uint32_t>& completion)
 {
-    if (!config_.completeImmediately && config_.latencyMs > 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(config_.latencyMs));
+    if (config_.latencyUs > 0) {
+        std::this_thread::sleep_for(std::chrono::microseconds(config_.latencyUs));
     }
 
     if (sendBuffer == nullptr || len < kSqeDwordCount * sizeof(std::uint32_t)) {

@@ -91,7 +91,7 @@ TEST(FakeTransProviderTest, BindMemoryCreatesProviderLocalHandles)
 TEST(FakeTransProviderTest, SendQueuesCompletionForWorker)
 {
     FakeTransProviderConfig config;
-    config.latencyMs = 20;
+    config.latencyUs = 20000;
     config.workerThreads = 2;
     FakeTransProvider provider(config);
 
@@ -144,6 +144,13 @@ TEST(FakeTransProviderTest, ParsesImmediateCompletionMode)
     EXPECT_TRUE(MakeFakeTransProviderConfig(config).completeImmediately);
 }
 
+TEST(FakeTransProviderTest, ParsesLatencyInMicroseconds)
+{
+    TransportConfig config;
+    config.attrs["fake_backend.latency_us"] = "250";
+    EXPECT_EQ(MakeFakeTransProviderConfig(config).latencyUs, 250U);
+}
+
 TEST(FakeTransProviderTest, ExistHonorsSeekControl)
 {
     const auto storePath =
@@ -164,7 +171,7 @@ TEST(FakeTransProviderTest, ExistHonorsSeekControl)
 
     FakeTransProviderConfig config;
     config.storePath = storePath.string();
-    config.latencyMs = 0;
+    config.latencyUs = 0;
     const std::vector<CacheKey> keys{first, missing, third};
     FakeTransProvider provider{config};
 
