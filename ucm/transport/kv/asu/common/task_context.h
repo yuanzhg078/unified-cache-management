@@ -138,8 +138,10 @@ struct ClientTask {
     std::atomic<std::size_t> remainingTransportPreSendTasks{0};
     std::atomic<std::size_t> remainingTransportSendTasks{0};
     std::chrono::steady_clock::time_point submittedAt{std::chrono::steady_clock::now()};
+    // Written immediately before publishing this task to the client SPSC queue.
     std::chrono::steady_clock::time_point enqueuedAt{};
     std::chrono::steady_clock::time_point processingStartedAt{};
+    std::atomic<bool> completionMetricRecorded{false};
     std::atomic<ClientTaskState> state{ClientTaskState::PENDING};
     Status finalStatus{Status::OK()};
 

@@ -491,8 +491,10 @@ Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>&
             taskId = kInvalidTaskId;
             return NotInitialized();
         }
-        rawCtx->enqueuedAt = std::chrono::steady_clock::now();
-        if (!taskQueue_.TryPush(std::move(rawCtx))) {
+        auto* const queuedTask = rawCtx.get();
+        if (!taskQueue_.TryPushBeforePublish(std::move(rawCtx), [queuedTask] {
+                queuedTask->enqueuedAt = std::chrono::steady_clock::now();
+            })) {
             (void)taskManager_.Remove(taskId);
             taskId = kInvalidTaskId;
             return Status::Error(StatusCode::RESOURCE_BUSY, "client task queue is full");
@@ -545,8 +547,10 @@ Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<CacheKey>&
             taskId = kInvalidTaskId;
             return NotInitialized();
         }
-        rawCtx->enqueuedAt = std::chrono::steady_clock::now();
-        if (!taskQueue_.TryPush(std::move(rawCtx))) {
+        auto* const queuedTask = rawCtx.get();
+        if (!taskQueue_.TryPushBeforePublish(std::move(rawCtx), [queuedTask] {
+                queuedTask->enqueuedAt = std::chrono::steady_clock::now();
+            })) {
             (void)taskManager_.Remove(taskId);
             taskId = kInvalidTaskId;
             return Status::Error(StatusCode::RESOURCE_BUSY, "client task queue is full");

@@ -103,6 +103,17 @@ void RecordClientTaskProcess(const ClientTask& task)
     Metrics::UpdateBuiltinBatch(&update, 1);
 }
 
+void RecordClientTaskCompletion(ClientTask& task)
+{
+    if (task.completionMetricRecorded.exchange(true, std::memory_order_acq_rel) ||
+        task.enqueuedAt == std::chrono::steady_clock::time_point{}) {
+        return;
+    }
+    const Metrics::BuiltinMetricUpdate update{
+        Metrics::MetricId::ClientTaskDuration, SecondsSince(task.submittedAt)};
+    Metrics::UpdateBuiltinBatch(&update, 1);
+}
+
 }  // namespace
 
 bool ClientTask::Done() const
@@ -169,6 +180,7 @@ void ClientTaskManager::CompleteWithError(const ClientTaskPtr& task, const Statu
     std::lock_guard<std::mutex> lock{task->waitMu};
     std::fill(task->entryStatus.begin(), task->entryStatus.end(), status);
     task->finalStatus = status;
+    RecordClientTaskCompletion(*task);
     UC_ERROR("ASU client task failed: client_task_id={} op={} code={} message={}.", task->taskId,
              AsuOpTypeName(task->opType), static_cast<int>(status.code), status.message);
     task->state.store(ClientTaskState::COMPLETED, std::memory_order_release);
@@ -265,6 +277,7 @@ void ClientTaskManager::Finalize(const ClientTaskPtr& task)
     task->finalStatus = failedTransportTasks == 0 ? Status::OK()
                                                   : Status::Error(StatusCode::PARTIAL_FAILED,
                                                                   "client task partially failed");
+    RecordClientTaskCompletion(*task);
     if (task->finalStatus.ok()) {
         UC_DEBUG("ASU client task completed: client_task_id={} op={} transport_tasks={}.",
                  task->taskId, AsuOpTypeName(task->opType), task->transportTasks.size());

@@ -243,7 +243,7 @@ sequenceDiagram
 | Transport task | `asu_transport_task_{queue,process,pre_send,send,completion}_duration_seconds` | transport 排队、提交和完成阶段耗时 |
 | Exporter | `asu_metrics_exporter_up`、`asu_metrics_exporter_http_requests_total` | standalone exporter 自监控 |
 
-其中 `asu_client_task_duration_seconds` 是从 client task 入队到最终完成；`asu_client_<op>_submit_duration_seconds` 只是提交 API 返回前的同步耗时，二者不能互相替代。
+其中 `asu_client_task_duration_seconds` 是从 client API 入口到最终完成；`asu_client_<op>_submit_duration_seconds` 只是提交 API 返回前的同步耗时，二者不能互相替代。
 
 ### 4.2 指标计数口径
 

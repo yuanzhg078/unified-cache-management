@@ -3,6 +3,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstdint>
 #include <iterator>
 #include <string>
@@ -11,6 +14,7 @@
 
 #include <gtest/gtest.h>
 
+#include "client_task_manager.h"
 #include "asu_metrics/metric_names.h"
 #include "asu_metrics/metrics.h"
 
@@ -62,6 +66,26 @@ std::string HttpGet(std::uint16_t port, const std::string& path)
     close(fd);
     return response;
 }
+
+class RecordingMetricsBackend final : public MetricsBackend {
+public:
+    bool Start() override { return true; }
+    void Add(std::string_view, double) noexcept override {}
+    void Set(std::string_view, double) noexcept override {}
+    void Observe(std::string_view, double) noexcept override {}
+    void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates, std::size_t count) noexcept override
+    {
+        for (std::size_t index = 0; index < count && recordedCount < recordedUpdates.size(); ++index) {
+            recordedUpdates[recordedCount++] = updates[index];
+        }
+    }
+    void Flush() override {}
+    void Stop() override {}
+    std::string LastError() const override { return {}; }
+
+    std::array<BuiltinMetricUpdate, 4> recordedUpdates{};
+    std::size_t recordedCount{0};
+};
 
 TEST(StandaloneMetricsTest, ExposesCounterGaugeAndHistogramInPrometheusFormat)
 {
@@ -167,6 +191,34 @@ TEST(StandaloneMetricsTest, UpdatesBuiltInMetricsInOneBatch)
     Shutdown();
     EXPECT_FALSE(IsEnabled());
     EXPECT_FALSE(StartTimer().enabled);
+}
+
+TEST(ClientTaskMetricsTest, RecordsApiEntryToCompletionOnce)
+{
+    auto backend = std::make_shared<RecordingMetricsBackend>();
+    std::string error;
+    ASSERT_TRUE(Initialize(backend, &error)) << error;
+
+    auto task = std::make_shared<UC::ASU::ClientTask>();
+    task->submittedAt = std::chrono::steady_clock::now() - std::chrono::milliseconds(5);
+    task->enqueuedAt = std::chrono::steady_clock::now();
+    UC::ASU::ClientTaskManager::Finalize(task);
+    UC::ASU::ClientTaskManager::Finalize(task);
+
+    const auto duration = std::find_if(
+        backend->recordedUpdates.begin(), backend->recordedUpdates.begin() + backend->recordedCount,
+        [](const BuiltinMetricUpdate& update) { return update.id == MetricId::ClientTaskDuration; });
+    ASSERT_NE(duration, backend->recordedUpdates.begin() + backend->recordedCount);
+    EXPECT_GT(duration->value, 0.004);
+    EXPECT_EQ(std::count_if(backend->recordedUpdates.begin(),
+                            backend->recordedUpdates.begin() + backend->recordedCount,
+                            [](const BuiltinMetricUpdate& update) {
+                                return update.id == MetricId::ClientTaskDuration;
+                            }),
+              1);
+    EXPECT_TRUE(task->Done());
+
+    Shutdown();
 }
 
 TEST(StandaloneMetricsTest, RejectsBuiltinMetricTypeOverride)

@@ -40,7 +40,7 @@ namespace UC::ASU::Metrics {
     X(ClientTaskProcessDuration, "asu_client_task_process_duration_seconds", HISTOGRAM, "ASU client worker processing duration until all transport tasks are submitted") \
     X(ClientTaskPreSendDuration, "asu_client_task_pre_send_duration_seconds", HISTOGRAM, "ASU client task duration from enqueue until all transport tasks reach provider Send") \
     X(ClientTaskSendDuration, "asu_client_task_send_duration_seconds", HISTOGRAM, "ASU client task duration from enqueue until all transport Send calls return") \
-    X(ClientTaskDuration, "asu_client_task_duration_seconds", HISTOGRAM, "ASU client task end-to-end duration from enqueue to completion") \
+    X(ClientTaskDuration, "asu_client_task_duration_seconds", HISTOGRAM, "ASU client task end-to-end duration from API entry to completion") \
     X(TransportTaskPreSendDuration, "asu_transport_task_pre_send_duration_seconds", HISTOGRAM, "ASU transport task duration from client dispatch until immediately before Send") \
     X(TransportTaskQueueDuration, "asu_transport_task_queue_duration_seconds", HISTOGRAM, "ASU transport task queue wait duration") \
     X(TransportTaskProcessDuration, "asu_transport_task_process_duration_seconds", HISTOGRAM, "ASU transport executor processing duration until immediately before Send") \

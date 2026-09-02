@@ -233,7 +233,7 @@
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 58},
       "title": "Task Pipeline Notes",
       "type": "text",
-      "options": {"content": "<h4>Latency boundaries</h4><p><b>Client task → all pre-Send</b> ends only when every child transport task has reached the provider <code>Send()</code> boundary. It includes client queueing, routing, splitting, transport enqueueing and executor queueing/preparation.</p><p><b>Transport task → pre-Send</b> is the same boundary for one child transport task. <b>Transport task → Send return</b> adds the provider Send call itself. <b>Send return → completion</b> is the completion-worker/CQE path. <b>End-to-end</b> is the whole client task from enqueue to final aggregation.</p>", "mode": "html"}
+      "options": {"content": "<h4>Latency boundaries</h4><p><b>Client task → all pre-Send</b> ends only when every child transport task has reached the provider <code>Send()</code> boundary. It includes client queueing, routing, splitting, transport enqueueing and executor queueing/preparation.</p><p><b>Transport task → pre-Send</b> is the same boundary for one child transport task. <b>Transport task → Send return</b> adds the provider Send call itself. <b>Send return → completion</b> is the completion-worker/CQE path. <b>End-to-end</b> is the whole client task from API entry to final aggregation.</p>", "mode": "html"}
     }
   ],
   "refresh": "5s",

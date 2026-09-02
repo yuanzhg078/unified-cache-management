@@ -30,6 +30,7 @@
 #include <functional>
 #include <memory>
 #include <thread>
+#include <utility>
 
 namespace UC {
 
@@ -69,11 +70,18 @@ public:
 
     bool TryPush(T&& value)
     {
+        return TryPushBeforePublish(std::move(value), [] {});
+    }
+
+    template <typename BeforePublish>
+    bool TryPushBeforePublish(T&& value, BeforePublish&& beforePublish)
+    {
         const size_t currentHead = head_.load(std::memory_order_relaxed);
         const size_t nextHead = Mod(currentHead + 1);
         const size_t currentTail = tail_.load(std::memory_order_acquire);
         if (nextHead == currentTail) { return false; }
         buffer_[currentHead] = std::move(value);
+        std::invoke(std::forward<BeforePublish>(beforePublish));
         head_.store(nextHead, std::memory_order_release);
         return true;
     }
