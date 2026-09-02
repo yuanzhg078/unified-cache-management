@@ -166,6 +166,8 @@ TEST(StandaloneMetricsTest, UpdatesBuiltInMetricsInOneBatch)
         {MetricId::TransportTaskPreSendDuration, 0.001},
         {MetricId::TransportTaskSendDuration, 0.001},
         {MetricId::TransportTaskCompletionDuration, 0.001},
+        {MetricId::FakeBackendTaskQueueDuration, 0.001},
+        {MetricId::FakeBackendTaskProcessDuration, 0.001},
     };
     UpdateBuiltinBatch(updates, std::size(updates));
     Flush();
@@ -186,6 +188,10 @@ TEST(StandaloneMetricsTest, UpdatesBuiltInMetricsInOneBatch)
     EXPECT_NE(response.find("ucm:asu_transport_task_send_duration_seconds_count 1"),
               std::string::npos);
     EXPECT_NE(response.find("ucm:asu_transport_task_completion_duration_seconds_count 1"),
+              std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_fake_backend_task_queue_duration_seconds_count 1"),
+              std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_fake_backend_task_process_duration_seconds_count 1"),
               std::string::npos);
 
     Shutdown();

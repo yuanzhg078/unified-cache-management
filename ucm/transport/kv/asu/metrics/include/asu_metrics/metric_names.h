@@ -46,6 +46,8 @@ namespace UC::ASU::Metrics {
     X(TransportTaskProcessDuration, "asu_transport_task_process_duration_seconds", HISTOGRAM, "ASU transport executor processing duration until immediately before Send") \
     X(TransportTaskSendDuration, "asu_transport_task_send_duration_seconds", HISTOGRAM, "ASU transport task duration from client dispatch until Send returns") \
     X(TransportTaskCompletionDuration, "asu_transport_task_completion_duration_seconds", HISTOGRAM, "ASU transport task duration from Send return until completion callback") \
+    X(FakeBackendTaskQueueDuration, "asu_fake_backend_task_queue_duration_seconds", HISTOGRAM, "ASU fake backend task queue wait duration from provider Send until fake worker starts") \
+    X(FakeBackendTaskProcessDuration, "asu_fake_backend_task_process_duration_seconds", HISTOGRAM, "ASU fake backend processing duration from fake worker start until completion is published") \
     X(ExporterUp, "asu_metrics_exporter_up", GAUGE, "Whether the ASU standalone metrics exporter is running") \
     X(ExporterHttpRequests, "asu_metrics_exporter_http_requests_total", COUNTER, "Total HTTP requests served by the ASU metrics endpoint")
 

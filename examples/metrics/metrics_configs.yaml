@@ -114,6 +114,12 @@ histogram:
   - name: "asu_transport_task_completion_duration_seconds"
     documentation: "ASU transport task duration from Send return until completion callback"
     buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_fake_backend_task_queue_duration_seconds"
+    documentation: "ASU fake backend task queue wait duration from provider Send until fake worker starts"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
+  - name: "asu_fake_backend_task_process_duration_seconds"
+    documentation: "ASU fake backend processing duration from fake worker start until completion is published"
+    buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]
   - name: "load_requests_num"
     documentation: "Number of requests loaded from ucm"
     buckets: [1, 5, 10, 20, 50, 100, 200, 500, 1000]

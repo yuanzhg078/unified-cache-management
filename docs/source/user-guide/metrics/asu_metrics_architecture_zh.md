@@ -241,6 +241,7 @@ sequenceDiagram
 | Wait | `asu_client_wait_{requests,errors}_total`、`asu_client_wait_duration_seconds` | 调用者等待行为 |
 | Client task | `asu_client_task_{enqueue,queue,process,pre_send,send,duration}_seconds` | client 内部各阶段及端到端耗时 |
 | Transport task | `asu_transport_task_{queue,process,pre_send,send,completion}_duration_seconds` | transport 排队、提交和完成阶段耗时 |
+| Fake backend | `asu_fake_backend_task_{queue,process}_duration_seconds` | 仅 fake provider：worker 排队，以及 worker 开始到 CQE 发布完成（包括 `fake_backend.latency_us` sleep 和 fake KV 操作） |
 | Exporter | `asu_metrics_exporter_up`、`asu_metrics_exporter_http_requests_total` | standalone exporter 自监控 |
 
 其中 `asu_client_task_duration_seconds` 是从 client API 入口到最终完成；`asu_client_<op>_submit_duration_seconds` 只是提交 API 返回前的同步耗时，二者不能互相替代。

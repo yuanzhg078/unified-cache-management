@@ -24,6 +24,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -77,6 +78,9 @@ private:
         std::vector<std::uint32_t> request;
         std::uint64_t requestLength{0};
         std::uint32_t* flagBuffer{nullptr};
+        // Set immediately before WorkerPool::Push.  It intentionally excludes
+        // Send()'s buffer validation, address resolution, and request copy.
+        std::chrono::steady_clock::time_point enqueuedAt{};
     };
 
     class WorkerPool;
