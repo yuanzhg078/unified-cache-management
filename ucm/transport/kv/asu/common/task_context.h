@@ -102,6 +102,8 @@ struct TransportTask {
     std::chrono::steady_clock::time_point submittedAt{std::chrono::steady_clock::now()};
     std::chrono::steady_clock::time_point processingStartedAt{};
     std::chrono::steady_clock::time_point sendCompletedAt{};
+    std::uint64_t queueWaitCount{0};
+    std::uint64_t queueNotifyCount{0};
     std::function<void()> onPreSend;
     std::atomic<bool> preSendNotified{false};
     std::function<void()> onSendComplete;

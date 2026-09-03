@@ -270,7 +270,7 @@ Status AsuTransportImpl::SubmitTask(const TransportTaskPtr& task)
         task->taskId = kInvalidTaskId;
         return Status::Error(StatusCode::RESOURCE_BUSY, "transport task queue is full");
     }
-    workerCv_.notify_one();
+    executeQueue_.NotifyOne(workerCv_);
     return Status::OK();
 }
 
@@ -278,6 +278,9 @@ void AsuTransportImpl::WorkerLoop()
 {
     executeQueue_.ConsumerLoop(stopWorker_, producerMu_, workerCv_, [this](TransportTaskPtr task) {
         if (!task) { return; }
+        const auto queueStats = executeQueue_.TakeStats();
+        task->queueWaitCount = queueStats.waitCount;
+        task->queueNotifyCount = queueStats.notifyCount;
         if (taskExecutor_->Execute(task)) { taskManager_.NotifyCompletion(task); }
     });
 }

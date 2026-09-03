@@ -1,22 +1,19 @@
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 #include <algorithm>
+#include <arpa/inet.h>
 #include <array>
 #include <chrono>
 #include <cstdint>
-#include <iterator>
-#include <string>
-#include <thread>
-#include <vector>
-
 #include <gtest/gtest.h>
-
-#include "client_task_manager.h"
+#include <iterator>
+#include <netinet/in.h>
+#include <string>
+#include <sys/socket.h>
+#include <thread>
+#include <unistd.h>
+#include <vector>
 #include "asu_metrics/metric_names.h"
 #include "asu_metrics/metrics.h"
+#include "client_task_manager.h"
 
 namespace UC::ASU::Metrics {
 namespace {
@@ -53,8 +50,7 @@ std::string HttpGet(std::uint16_t port, const std::string& path)
     EXPECT_EQ(connect(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)), 0);
 
     const auto request = "GET " + path + " HTTP/1.1\r\nHost: localhost\r\n\r\n";
-    EXPECT_EQ(send(fd, request.data(), request.size(), 0),
-              static_cast<ssize_t>(request.size()));
+    EXPECT_EQ(send(fd, request.data(), request.size(), 0), static_cast<ssize_t>(request.size()));
 
     std::string response;
     char buffer[4096];
@@ -75,7 +71,8 @@ public:
     void Observe(std::string_view, double) noexcept override {}
     void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates, std::size_t count) noexcept override
     {
-        for (std::size_t index = 0; index < count && recordedCount < recordedUpdates.size(); ++index) {
+        for (std::size_t index = 0; index < count && recordedCount < recordedUpdates.size();
+             ++index) {
             recordedUpdates[recordedCount++] = updates[index];
         }
     }
@@ -92,7 +89,9 @@ TEST(StandaloneMetricsTest, ExposesCounterGaugeAndHistogramInPrometheusFormat)
     StandaloneMetricsConfig config;
     config.port = FindUnusedLoopbackPort();
     ASSERT_NE(config.port, 0);
-    config.constantLabels = {{"source", "test"}};
+    config.constantLabels = {
+        {"source", "test"}
+    };
 
     std::string error;
     ASSERT_TRUE(Initialize(CreateStandaloneMetricsBackend(config), &error)) << error;
@@ -103,14 +102,12 @@ TEST(StandaloneMetricsTest, ExposesCounterGaugeAndHistogramInPrometheusFormat)
 
     const auto response = HttpGet(config.port, config.metricsPath);
     EXPECT_NE(response.find("HTTP/1.1 200 OK"), std::string::npos);
-    EXPECT_NE(response.find(
-                  "ucm:asu_client_store_requests_total{source=\"test\"} 2"),
+    EXPECT_NE(response.find("ucm:asu_client_store_requests_total{source=\"test\"} 2"),
               std::string::npos);
-    EXPECT_NE(response.find(
-                  "ucm:asu_client_store_submit_duration_seconds_count{source=\"test\"} 1"),
-              std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_metrics_exporter_up{source=\"test\"} 1"),
-              std::string::npos);
+    EXPECT_NE(
+        response.find("ucm:asu_client_store_submit_duration_seconds_count{source=\"test\"} 1"),
+        std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_metrics_exporter_up{source=\"test\"} 1"), std::string::npos);
 
     Shutdown();
 }
@@ -157,17 +154,21 @@ TEST(StandaloneMetricsTest, UpdatesBuiltInMetricsInOneBatch)
     ASSERT_TRUE(Initialize(CreateStandaloneMetricsBackend(config), &error)) << error;
 
     const BuiltinMetricUpdate updates[] = {
-        {MetricId::StoreRequests, 1.0},
-        {MetricId::StoreEntries, 8.0},
-        {MetricId::StoreSubmitDuration, 0.002},
-        {MetricId::ClientTaskPreSendDuration, 0.001},
-        {MetricId::ClientTaskSendDuration, 0.001},
-        {MetricId::ClientTaskDuration, 0.002},
-        {MetricId::TransportTaskPreSendDuration, 0.001},
-        {MetricId::TransportTaskSendDuration, 0.001},
+        {MetricId::StoreRequests,                   1.0  },
+        {MetricId::StoreEntries,                    8.0  },
+        {MetricId::StoreSubmitDuration,             0.002},
+        {MetricId::ClientTaskPreSendDuration,       0.001},
+        {MetricId::ClientTaskSendDuration,          0.001},
+        {MetricId::ClientTaskDuration,              0.002},
+        {MetricId::ClientTaskQueueWaits,            2.0  },
+        {MetricId::ClientTaskQueueNotifies,         3.0  },
+        {MetricId::TransportTaskPreSendDuration,    0.001},
+        {MetricId::TransportTaskSendDuration,       0.001},
         {MetricId::TransportTaskCompletionDuration, 0.001},
-        {MetricId::FakeBackendTaskQueueDuration, 0.001},
-        {MetricId::FakeBackendTaskProcessDuration, 0.001},
+        {MetricId::TransportTaskQueueWaits,         4.0  },
+        {MetricId::TransportTaskQueueNotifies,      5.0  },
+        {MetricId::FakeBackendTaskQueueDuration,    0.001},
+        {MetricId::FakeBackendTaskProcessDuration,  0.001},
     };
     UpdateBuiltinBatch(updates, std::size(updates));
     Flush();
@@ -181,14 +182,17 @@ TEST(StandaloneMetricsTest, UpdatesBuiltInMetricsInOneBatch)
               std::string::npos);
     EXPECT_NE(response.find("ucm:asu_client_task_send_duration_seconds_count 1"),
               std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_client_task_duration_seconds_count 1"),
-              std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_client_task_duration_seconds_count 1"), std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_client_task_queue_wait_total 2"), std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_client_task_queue_notify_total 3"), std::string::npos);
     EXPECT_NE(response.find("ucm:asu_transport_task_pre_send_duration_seconds_count 1"),
               std::string::npos);
     EXPECT_NE(response.find("ucm:asu_transport_task_send_duration_seconds_count 1"),
               std::string::npos);
     EXPECT_NE(response.find("ucm:asu_transport_task_completion_duration_seconds_count 1"),
               std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_transport_task_queue_wait_total 4"), std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_transport_task_queue_notify_total 5"), std::string::npos);
     EXPECT_NE(response.find("ucm:asu_fake_backend_task_queue_duration_seconds_count 1"),
               std::string::npos);
     EXPECT_NE(response.find("ucm:asu_fake_backend_task_process_duration_seconds_count 1"),
@@ -211,9 +215,11 @@ TEST(ClientTaskMetricsTest, RecordsApiEntryToCompletionOnce)
     UC::ASU::ClientTaskManager::Finalize(task);
     UC::ASU::ClientTaskManager::Finalize(task);
 
-    const auto duration = std::find_if(
-        backend->recordedUpdates.begin(), backend->recordedUpdates.begin() + backend->recordedCount,
-        [](const BuiltinMetricUpdate& update) { return update.id == MetricId::ClientTaskDuration; });
+    const auto duration = std::find_if(backend->recordedUpdates.begin(),
+                                       backend->recordedUpdates.begin() + backend->recordedCount,
+                                       [](const BuiltinMetricUpdate& update) {
+                                           return update.id == MetricId::ClientTaskDuration;
+                                       });
     ASSERT_NE(duration, backend->recordedUpdates.begin() + backend->recordedCount);
     EXPECT_GT(duration->value, 0.004);
     EXPECT_EQ(std::count_if(backend->recordedUpdates.begin(),
@@ -232,9 +238,10 @@ TEST(StandaloneMetricsTest, RejectsBuiltinMetricTypeOverride)
     StandaloneMetricsConfig config;
     config.port = FindUnusedLoopbackPort();
     ASSERT_NE(config.port, 0);
-    config.descriptors.push_back(
-        {std::string{MetricName(MetricId::StoreRequests)}, MetricType::GAUGE,
-         "invalid override", {}});
+    config.descriptors.push_back({std::string{MetricName(MetricId::StoreRequests)},
+                                  MetricType::GAUGE,
+                                  "invalid override",
+                                  {}});
 
     std::string error;
     EXPECT_FALSE(Initialize(CreateStandaloneMetricsBackend(config), &error));

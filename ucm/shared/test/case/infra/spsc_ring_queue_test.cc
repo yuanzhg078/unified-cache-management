@@ -110,7 +110,7 @@ TEST_F(UCSpscRingQueueTest, ConsumerLoopWakesForTaskAndStop)
         std::lock_guard<std::mutex> lock(waitMutex);
         EXPECT_TRUE(queue.TryPush(42));
     }
-    waitCondition.notify_one();
+    queue.NotifyOne(waitCondition);
 
     const auto waitStatus = processed.wait_for(std::chrono::seconds(1));
     {
@@ -122,4 +122,32 @@ TEST_F(UCSpscRingQueueTest, ConsumerLoopWakesForTaskAndStop)
 
     ASSERT_EQ(waitStatus, std::future_status::ready);
     EXPECT_EQ(processed.get(), 42);
+    const auto queueStats = queue.TakeStats();
+    EXPECT_EQ(queueStats.notifyCount, 1U);
+}
+
+TEST_F(UCSpscRingQueueTest, ConsumerLoopCountsWaits)
+{
+    UC::SpscRingQueue<size_t> queue;
+    queue.Setup(16);
+    std::atomic_bool stop{false};
+    std::mutex waitMutex;
+    std::condition_variable waitCondition;
+    std::thread consumer(
+        [&] { queue.ConsumerLoop(stop, waitMutex, waitCondition, [](size_t) {}); });
+
+    std::uint64_t waitCount = 0;
+    for (std::uint32_t attempt = 0; attempt < 100 && waitCount == 0; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        waitCount += queue.TakeStats().waitCount;
+    }
+    {
+        std::lock_guard<std::mutex> lock(waitMutex);
+        stop.store(true, std::memory_order_release);
+    }
+    waitCondition.notify_one();
+    consumer.join();
+    waitCount += queue.TakeStats().waitCount;
+
+    EXPECT_GT(waitCount, 0U);
 }

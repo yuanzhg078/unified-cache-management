@@ -501,7 +501,7 @@ Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>&
             return Status::Error(StatusCode::RESOURCE_BUSY, "client task queue is full");
         }
     }
-    workerCv_.notify_one();
+    taskQueue_.NotifyOne(workerCv_);
     const Metrics::BuiltinMetricUpdate enqueueUpdate{
         Metrics::MetricId::ClientTaskEnqueueDuration,
         std::chrono::duration<double>(std::chrono::steady_clock::now() - taskStart).count()};
@@ -557,7 +557,7 @@ Status AsuClientImpl::SubmitAsync(AsuOpType opType, const std::vector<CacheKey>&
             return Status::Error(StatusCode::RESOURCE_BUSY, "client task queue is full");
         }
     }
-    workerCv_.notify_one();
+    taskQueue_.NotifyOne(workerCv_);
     const Metrics::BuiltinMetricUpdate enqueueUpdate{
         Metrics::MetricId::ClientTaskEnqueueDuration,
         std::chrono::duration<double>(std::chrono::steady_clock::now() - taskStart).count()};
@@ -569,10 +569,15 @@ void AsuClientImpl::WorkerLoop()
 {
     auto processTask = [this](ClientTaskPtr ctx) {
         ctx->processingStartedAt = std::chrono::steady_clock::now();
-        const Metrics::BuiltinMetricUpdate queueUpdate{
-            Metrics::MetricId::ClientTaskQueueDuration,
-            std::chrono::duration<double>(ctx->processingStartedAt - ctx->enqueuedAt).count()};
-        Metrics::UpdateBuiltinBatch(&queueUpdate, 1);
+        const auto queueStats = taskQueue_.TakeStats();
+        const Metrics::BuiltinMetricUpdate queueUpdates[] = {
+            {Metrics::MetricId::ClientTaskQueueDuration,
+             std::chrono::duration<double>(ctx->processingStartedAt - ctx->enqueuedAt).count()    },
+            {Metrics::MetricId::ClientTaskQueueWaits,    static_cast<double>(queueStats.waitCount)},
+            {Metrics::MetricId::ClientTaskQueueNotifies,
+             static_cast<double>(queueStats.notifyCount)                                          },
+        };
+        Metrics::UpdateBuiltinBatch(queueUpdates, std::size(queueUpdates));
         auto status = taskManager_.Process(ctx);
         if (IsRefreshNeeded(status)) { RequestBackgroundRefresh(); }
     };

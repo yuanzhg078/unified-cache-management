@@ -29,6 +29,7 @@
 #include <climits>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -36,6 +37,11 @@
 #include <utility>
 
 namespace UC {
+
+struct SpscRingQueueStats {
+    std::uint64_t waitCount{0};
+    std::uint64_t notifyCount{0};
+};
 
 template <typename T>
 class SpscRingQueue {
@@ -45,6 +51,8 @@ class SpscRingQueue {
     size_t mask_{0};
     size_t capacity_{0};
     std::unique_ptr<T[]> buffer_;
+    std::atomic<std::uint64_t> waitCount_{0};
+    std::atomic<std::uint64_t> notifyCount_{0};
 
     size_t Mod(size_t n) { return pow2_ ? (n & mask_) : (n % capacity_); }
 
@@ -97,6 +105,20 @@ public:
         value = std::move(buffer_[currentTail]);
         tail_.store(Mod(currentTail + 1), std::memory_order_release);
         return true;
+    }
+
+    void NotifyOne(std::condition_variable& waitCondition)
+    {
+        waitCondition.notify_one();
+        notifyCount_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    SpscRingQueueStats TakeStats()
+    {
+        SpscRingQueueStats stats;
+        stats.waitCount = waitCount_.exchange(0, std::memory_order_relaxed);
+        stats.notifyCount = notifyCount_.exchange(0, std::memory_order_relaxed);
+        return stats;
     }
 
     template <typename ConsumerHandler, typename... Args>
@@ -155,11 +177,12 @@ public:
             }
 
             std::unique_lock<std::mutex> lock(waitMutex);
-            waitCondition.wait(lock, [this, &stop] {
+            waitCondition.wait_for(lock, std::chrono::microseconds(50), [this, &stop] {
                 return stop.load(std::memory_order_acquire) ||
                        head_.load(std::memory_order_acquire) !=
                            tail_.load(std::memory_order_relaxed);
             });
+            waitCount_.fetch_add(1, std::memory_order_relaxed);
             spinCount = 0;
         }
     }
