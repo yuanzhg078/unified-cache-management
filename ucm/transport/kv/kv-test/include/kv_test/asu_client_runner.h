@@ -24,6 +24,9 @@ public:
                  CommandResult& result);
     Status Retrieve(const BufferSet& buffers, SubmitMode submitMode, std::uint64_t timeoutMs,
                     CommandResult& result);
+    Status SubmitStore(const BufferSet& buffers, SubmitMode submitMode, UC::ASU::TaskId& taskId);
+    Status SubmitRetrieve(const BufferSet& buffers, SubmitMode submitMode, UC::ASU::TaskId& taskId);
+    Status Wait(UC::ASU::TaskId taskId, std::uint64_t timeoutMs, CommandResult& result);
     Status Delete(const std::vector<UC::ASU::CacheKey>& keys, std::uint64_t timeoutMs,
                   CommandResult& result);
     Status Exist(const std::vector<UC::ASU::CacheKey>& keys, std::uint64_t timeoutMs,

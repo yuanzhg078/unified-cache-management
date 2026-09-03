@@ -51,12 +51,10 @@ std::uint32_t ParseUint32(const std::string& value)
 bool ParseBool(const std::string& value)
 {
     const auto normalized = NormalizeKey(Trim(value));
-    if (normalized == "true" || normalized == "1" || normalized == "yes" ||
-        normalized == "on") {
+    if (normalized == "true" || normalized == "1" || normalized == "yes" || normalized == "on") {
         return true;
     }
-    if (normalized == "false" || normalized == "0" || normalized == "no" ||
-        normalized == "off") {
+    if (normalized == "false" || normalized == "0" || normalized == "no" || normalized == "off") {
         return false;
     }
     throw std::invalid_argument("invalid boolean");
@@ -237,6 +235,7 @@ Status KvTestConfigLoader::Load(const std::string& configPath, KvTestConfig& con
         GetUint64Any(values, {"limits.memory_max_bytes"}, config.memoryMaxBytes);
 
         GetUint64Any(values, {"bench.io_size"}, config.bench.ioSize);
+        GetUint64Any(values, {"bench.io_interval_us"}, config.bench.ioIntervalUs);
         GetUint32Any(values, {"bench.concurrency"}, config.bench.concurrency);
         GetUint64Any(values, {"bench.duration_sec"}, config.bench.durationSec);
         GetUint64Any(values, {"bench.io_count"}, config.bench.ioCount);
@@ -260,8 +259,7 @@ Status KvTestConfigLoader::Load(const std::string& configPath, KvTestConfig& con
         GetStringAny(values, {"metrics.worker_id"}, config.metrics.workerId);
         GetUint32Any(values, {"metrics.aggregation_interval_ms"},
                      config.metrics.aggregationIntervalMs);
-        GetUint32Any(values, {"metrics.shutdown_grace_ms"},
-                     config.metrics.shutdownGraceMs);
+        GetUint32Any(values, {"metrics.shutdown_grace_ms"}, config.metrics.shutdownGraceMs);
 
         std::uint32_t metricsPort = config.metrics.port;
         if (GetUint32Any(values, {"metrics.port"}, metricsPort)) {

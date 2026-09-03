@@ -47,6 +47,14 @@ Status FinalizeQueryResult(CommandResult& result)
 using EntrySubmitMethod = UC::ASU::Status (UC::ASU::AsuClient::*)(
     const std::vector<UC::ASU::KVBuffer>&, UC::ASU::TaskId&);
 
+Status SubmitEntriesAsync(UC::ASU::AsuClient& client, const std::vector<UC::ASU::KVBuffer>& entries,
+                          EntrySubmitMethod submitMethod, const std::string& operation,
+                          UC::ASU::TaskId& taskId)
+{
+    auto status = (client.*submitMethod)(entries, taskId);
+    return ToKvTestStatus(status, operation);
+}
+
 Status SubmitAndWaitEntries(UC::ASU::AsuClient& client,
                             const std::vector<UC::ASU::KVBuffer>& entries,
                             EntrySubmitMethod submitMethod, std::uint64_t timeoutMs,
@@ -240,6 +248,39 @@ Status AsuClientRunner::Retrieve(const BufferSet& buffers, SubmitMode submitMode
 
     return SubmitAndWaitEntries(*client_, buffers.entries, &UC::ASU::AsuClient::BatchLoadAsync,
                                 timeoutMs, "retrieve", result);
+}
+
+Status AsuClientRunner::SubmitStore(const BufferSet& buffers, SubmitMode submitMode,
+                                    UC::ASU::TaskId& taskId)
+{
+    if (client_ == nullptr) { return Status::Error(kExitInvalidArgument, "asu client is null"); }
+    const auto submitMethod = submitMode == SubmitMode::SINGLE_ENTRY_PER_CALL
+                                  ? &UC::ASU::AsuClient::StoreAsync
+                                  : &UC::ASU::AsuClient::BatchStoreAsync;
+    return SubmitEntriesAsync(*client_, buffers.entries, submitMethod, "store", taskId);
+}
+
+Status AsuClientRunner::SubmitRetrieve(const BufferSet& buffers, SubmitMode submitMode,
+                                       UC::ASU::TaskId& taskId)
+{
+    if (client_ == nullptr) { return Status::Error(kExitInvalidArgument, "asu client is null"); }
+    const auto submitMethod = submitMode == SubmitMode::SINGLE_ENTRY_PER_CALL
+                                  ? &UC::ASU::AsuClient::LoadAsync
+                                  : &UC::ASU::AsuClient::BatchLoadAsync;
+    return SubmitEntriesAsync(*client_, buffers.entries, submitMethod, "retrieve", taskId);
+}
+
+Status AsuClientRunner::Wait(UC::ASU::TaskId taskId, std::uint64_t timeoutMs, CommandResult& result)
+{
+    if (client_ == nullptr) { return Status::Error(kExitInvalidArgument, "asu client is null"); }
+
+    auto status = client_->Wait(taskId, timeoutMs, result.taskResult);
+    if (!status.ok()) {
+        if (result.taskResult.status.ok()) { result.taskResult.status = status; }
+        result.status = ToKvTestStatus(status, "wait");
+        return result.status;
+    }
+    return FinalizeTaskResult(result);
 }
 
 Status AsuClientRunner::Delete(const std::vector<UC::ASU::CacheKey>& keys, std::uint64_t timeoutMs,

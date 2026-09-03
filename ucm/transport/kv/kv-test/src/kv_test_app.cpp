@@ -8,10 +8,10 @@
 #include <sstream>
 #include <thread>
 #include <unordered_map>
+#include "asu_metrics/metrics.h"
 #include "kv_test/asu_runtime_proxy.h"
 #include "kv_test/kv_test_config_helpers.h"
 #include "kv_test/payload_buffer_runtime.h"
-#include "asu_metrics/metrics.h"
 
 namespace UC::KVTest {
 
@@ -42,20 +42,19 @@ public:
         backendConfig.constantLabels = {
             {"model_name", config.modelName},
             {"source",     config.source   },
-            {"worker_id",  config.workerId},
+            {"worker_id",  config.workerId },
         };
 
         std::string error;
-        auto backend = UC::ASU::Metrics::CreateStandaloneMetricsBackend(
-            std::move(backendConfig));
+        auto backend = UC::ASU::Metrics::CreateStandaloneMetricsBackend(std::move(backendConfig));
         if (!UC::ASU::Metrics::Initialize(std::move(backend), &error)) {
             return Status::Error(kExitInvalidArgument,
                                  "failed to start ASU metrics exporter: " + error);
         }
         started_ = true;
         shutdownGraceMs_ = config.shutdownGraceMs;
-        std::cout << "metrics: http://" << config.listenAddress << ':' << config.port
-                  << config.path << '\n';
+        std::cout << "metrics: http://" << config.listenAddress << ':' << config.port << config.path
+                  << '\n';
         return Status::Success();
     }
 
@@ -110,6 +109,7 @@ CommandOptions BuildEffectiveOptions(const CommandOptions& options, const KvTest
     effective.valueSize = options.command == CommandType::BENCH
                               ? config.bench.ioSize
                               : EffectiveValueSize(options, config);
+    effective.ioIntervalUs = config.bench.ioIntervalUs;
     effective.keyPrefix = EffectiveKeyPrefix(options, config);
     effective.batchSize = config.bench.batchSize;
     effective.timeoutMs = config.asuClientConfig.defaultWaitTimeoutMs;
