@@ -22,7 +22,12 @@
  * SOFTWARE.
  * */
 #include "template/spsc_ring_queue.h"
+#include <chrono>
+#include <condition_variable>
+#include <future>
 #include <gtest/gtest.h>
+#include <mutex>
+#include <thread>
 
 class UCSpscRingQueueTest : public testing::Test {};
 
@@ -84,4 +89,37 @@ TEST_F(UCSpscRingQueueTest, MoveOnly)
     MoveOnly obj;
     EXPECT_TRUE(queue.TryPop(obj));
     EXPECT_EQ(obj.value, 42);
+}
+
+TEST_F(UCSpscRingQueueTest, ConsumerLoopWakesForTaskAndStop)
+{
+    UC::SpscRingQueue<size_t> queue;
+    queue.Setup(16);
+    std::atomic_bool stop{false};
+    std::mutex waitMutex;
+    std::condition_variable waitCondition;
+    std::promise<size_t> processedPromise;
+    auto processed = processedPromise.get_future();
+
+    std::thread consumer([&] {
+        queue.ConsumerLoop(stop, waitMutex, waitCondition, [&processedPromise](size_t value) {
+            processedPromise.set_value(value);
+        });
+    });
+    {
+        std::lock_guard<std::mutex> lock(waitMutex);
+        EXPECT_TRUE(queue.TryPush(42));
+    }
+    waitCondition.notify_one();
+
+    const auto waitStatus = processed.wait_for(std::chrono::seconds(1));
+    {
+        std::lock_guard<std::mutex> lock(waitMutex);
+        stop.store(true, std::memory_order_release);
+    }
+    waitCondition.notify_one();
+    consumer.join();
+
+    ASSERT_EQ(waitStatus, std::future_status::ready);
+    EXPECT_EQ(processed.get(), 42);
 }
