@@ -254,10 +254,12 @@
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 66},
       "options": {"legend": {"calcs": ["lastNotNull"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
       "targets": [
-        {"expr": "sum(ucm:asu_client_task_queue_wait_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "client wait", "refId": "A"},
-        {"expr": "sum(ucm:asu_client_task_queue_notify_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "client notify", "refId": "B"},
-        {"expr": "sum(ucm:asu_transport_task_queue_wait_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "transport wait", "refId": "C"},
-        {"expr": "sum(ucm:asu_transport_task_queue_notify_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "transport notify", "refId": "D"}
+        {"expr": "sum(ucm:asu_client_task_queue_wait_notified_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "client wait notified", "refId": "A"},
+        {"expr": "sum(ucm:asu_client_task_queue_wait_timeout_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "client wait timeout", "refId": "B"},
+        {"expr": "sum(ucm:asu_client_task_queue_notify_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "client notify", "refId": "C"},
+        {"expr": "sum(ucm:asu_transport_task_queue_wait_notified_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "transport wait notified", "refId": "D"},
+        {"expr": "sum(ucm:asu_transport_task_queue_wait_timeout_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "transport wait timeout", "refId": "E"},
+        {"expr": "sum(ucm:asu_transport_task_queue_notify_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"})", "legendFormat": "transport notify", "refId": "F"}
       ],
       "title": "SPSC Wait / Notify Counters",
       "type": "timeseries"
@@ -268,8 +270,10 @@
       "gridPos": {"h": 8, "w": 12, "x": 12, "y": 66},
       "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
       "targets": [
-        {"expr": "sum(rate(ucm:asu_client_task_queue_wait_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_client_task_queue_notify_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "client waits / notify", "refId": "A"},
-        {"expr": "sum(rate(ucm:asu_transport_task_queue_wait_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_transport_task_queue_notify_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "transport waits / notify", "refId": "B"}
+        {"expr": "sum(rate(ucm:asu_client_task_queue_wait_notified_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_client_task_queue_notify_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "client notified waits / notify", "refId": "A"},
+        {"expr": "sum(rate(ucm:asu_client_task_queue_wait_timeout_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_client_task_queue_notify_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "client timeouts / notify", "refId": "B"},
+        {"expr": "sum(rate(ucm:asu_transport_task_queue_wait_notified_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_transport_task_queue_notify_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "transport notified waits / notify", "refId": "C"},
+        {"expr": "sum(rate(ucm:asu_transport_task_queue_wait_timeout_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(ucm:asu_transport_task_queue_notify_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "transport timeouts / notify", "refId": "D"}
       ],
       "title": "SPSC Waits per Notify",
       "type": "timeseries"
@@ -288,5 +292,5 @@
   "timezone": "browser",
   "title": "ASU Client / kv-test Metrics",
   "uid": "asu-client-metrics",
-  "version": 4
+  "version": 5
 }

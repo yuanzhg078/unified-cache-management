@@ -279,7 +279,8 @@ void AsuTransportImpl::WorkerLoop()
     executeQueue_.ConsumerLoop(stopWorker_, producerMu_, workerCv_, [this](TransportTaskPtr task) {
         if (!task) { return; }
         const auto queueStats = executeQueue_.TakeStats();
-        task->queueWaitCount = queueStats.waitCount;
+        task->queueWaitNotifiedCount = queueStats.waitNotifiedCount;
+        task->queueWaitTimeoutCount = queueStats.waitTimeoutCount;
         task->queueNotifyCount = queueStats.notifyCount;
         if (taskExecutor_->Execute(task)) { taskManager_.NotifyCompletion(task); }
     });

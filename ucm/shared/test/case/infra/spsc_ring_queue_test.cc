@@ -106,6 +106,12 @@ TEST_F(UCSpscRingQueueTest, ConsumerLoopWakesForTaskAndStop)
             processedPromise.set_value(value);
         });
     });
+    std::uint64_t waitTimeoutCount = 0;
+    for (std::uint32_t attempt = 0; attempt < 100 && waitTimeoutCount == 0; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        waitTimeoutCount += queue.TakeStats().waitTimeoutCount;
+    }
+    EXPECT_GT(waitTimeoutCount, 0U);
     {
         std::lock_guard<std::mutex> lock(waitMutex);
         EXPECT_TRUE(queue.TryPush(42));
@@ -113,6 +119,7 @@ TEST_F(UCSpscRingQueueTest, ConsumerLoopWakesForTaskAndStop)
     queue.NotifyOne(waitCondition);
 
     const auto waitStatus = processed.wait_for(std::chrono::seconds(1));
+    const auto queueStats = queue.TakeStats();
     {
         std::lock_guard<std::mutex> lock(waitMutex);
         stop.store(true, std::memory_order_release);
@@ -122,11 +129,11 @@ TEST_F(UCSpscRingQueueTest, ConsumerLoopWakesForTaskAndStop)
 
     ASSERT_EQ(waitStatus, std::future_status::ready);
     EXPECT_EQ(processed.get(), 42);
-    const auto queueStats = queue.TakeStats();
+    EXPECT_EQ(queueStats.waitNotifiedCount, 1U);
     EXPECT_EQ(queueStats.notifyCount, 1U);
 }
 
-TEST_F(UCSpscRingQueueTest, ConsumerLoopCountsWaits)
+TEST_F(UCSpscRingQueueTest, ConsumerLoopCountsWaitTimeouts)
 {
     UC::SpscRingQueue<size_t> queue;
     queue.Setup(16);
@@ -136,10 +143,10 @@ TEST_F(UCSpscRingQueueTest, ConsumerLoopCountsWaits)
     std::thread consumer(
         [&] { queue.ConsumerLoop(stop, waitMutex, waitCondition, [](size_t) {}); });
 
-    std::uint64_t waitCount = 0;
-    for (std::uint32_t attempt = 0; attempt < 100 && waitCount == 0; ++attempt) {
+    std::uint64_t waitTimeoutCount = 0;
+    for (std::uint32_t attempt = 0; attempt < 100 && waitTimeoutCount == 0; ++attempt) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        waitCount += queue.TakeStats().waitCount;
+        waitTimeoutCount += queue.TakeStats().waitTimeoutCount;
     }
     {
         std::lock_guard<std::mutex> lock(waitMutex);
@@ -147,7 +154,7 @@ TEST_F(UCSpscRingQueueTest, ConsumerLoopCountsWaits)
     }
     waitCondition.notify_one();
     consumer.join();
-    waitCount += queue.TakeStats().waitCount;
+    waitTimeoutCount += queue.TakeStats().waitTimeoutCount;
 
-    EXPECT_GT(waitCount, 0U);
+    EXPECT_GT(waitTimeoutCount, 0U);
 }

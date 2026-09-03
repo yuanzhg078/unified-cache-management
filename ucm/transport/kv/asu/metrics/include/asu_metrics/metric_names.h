@@ -72,8 +72,10 @@ namespace UC::ASU::Metrics {
       "ASU client task duration from enqueue until all transport Send calls return")               \
     X(ClientTaskDuration, "asu_client_task_duration_seconds", HISTOGRAM,                           \
       "ASU client task end-to-end duration from API entry to completion")                          \
-    X(ClientTaskQueueWaits, "asu_client_task_queue_wait_total", COUNTER,                           \
-      "Total ASU client task queue condition-variable waits")                                      \
+    X(ClientTaskQueueWaitNotified, "asu_client_task_queue_wait_notified_total", COUNTER,           \
+      "Total ASU client task queue waits completed by notification")                               \
+    X(ClientTaskQueueWaitTimeouts, "asu_client_task_queue_wait_timeout_total", COUNTER,            \
+      "Total ASU client task queue waits completed by timeout")                                    \
     X(ClientTaskQueueNotifies, "asu_client_task_queue_notify_total", COUNTER,                      \
       "Total ASU client task queue condition-variable notifications")                              \
     X(TransportTaskPreSendDuration, "asu_transport_task_pre_send_duration_seconds", HISTOGRAM,     \
@@ -86,8 +88,10 @@ namespace UC::ASU::Metrics {
       "ASU transport task duration from client dispatch until Send returns")                       \
     X(TransportTaskCompletionDuration, "asu_transport_task_completion_duration_seconds",           \
       HISTOGRAM, "ASU transport task duration from Send return until completion callback")         \
-    X(TransportTaskQueueWaits, "asu_transport_task_queue_wait_total", COUNTER,                     \
-      "Total ASU transport task queue condition-variable waits")                                   \
+    X(TransportTaskQueueWaitNotified, "asu_transport_task_queue_wait_notified_total", COUNTER,     \
+      "Total ASU transport task queue waits completed by notification")                            \
+    X(TransportTaskQueueWaitTimeouts, "asu_transport_task_queue_wait_timeout_total", COUNTER,      \
+      "Total ASU transport task queue waits completed by timeout")                                 \
     X(TransportTaskQueueNotifies, "asu_transport_task_queue_notify_total", COUNTER,                \
       "Total ASU transport task queue condition-variable notifications")                           \
     X(FakeBackendTaskQueueDuration, "asu_fake_backend_task_queue_duration_seconds", HISTOGRAM,     \

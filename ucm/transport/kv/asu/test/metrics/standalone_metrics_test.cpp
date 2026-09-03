@@ -160,12 +160,14 @@ TEST(StandaloneMetricsTest, UpdatesBuiltInMetricsInOneBatch)
         {MetricId::ClientTaskPreSendDuration,       0.001},
         {MetricId::ClientTaskSendDuration,          0.001},
         {MetricId::ClientTaskDuration,              0.002},
-        {MetricId::ClientTaskQueueWaits,            2.0  },
+        {MetricId::ClientTaskQueueWaitNotified,     2.0  },
+        {MetricId::ClientTaskQueueWaitTimeouts,     6.0  },
         {MetricId::ClientTaskQueueNotifies,         3.0  },
         {MetricId::TransportTaskPreSendDuration,    0.001},
         {MetricId::TransportTaskSendDuration,       0.001},
         {MetricId::TransportTaskCompletionDuration, 0.001},
-        {MetricId::TransportTaskQueueWaits,         4.0  },
+        {MetricId::TransportTaskQueueWaitNotified,  4.0  },
+        {MetricId::TransportTaskQueueWaitTimeouts,  7.0  },
         {MetricId::TransportTaskQueueNotifies,      5.0  },
         {MetricId::FakeBackendTaskQueueDuration,    0.001},
         {MetricId::FakeBackendTaskProcessDuration,  0.001},
@@ -183,7 +185,8 @@ TEST(StandaloneMetricsTest, UpdatesBuiltInMetricsInOneBatch)
     EXPECT_NE(response.find("ucm:asu_client_task_send_duration_seconds_count 1"),
               std::string::npos);
     EXPECT_NE(response.find("ucm:asu_client_task_duration_seconds_count 1"), std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_client_task_queue_wait_total 2"), std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_client_task_queue_wait_notified_total 2"), std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_client_task_queue_wait_timeout_total 6"), std::string::npos);
     EXPECT_NE(response.find("ucm:asu_client_task_queue_notify_total 3"), std::string::npos);
     EXPECT_NE(response.find("ucm:asu_transport_task_pre_send_duration_seconds_count 1"),
               std::string::npos);
@@ -191,7 +194,10 @@ TEST(StandaloneMetricsTest, UpdatesBuiltInMetricsInOneBatch)
               std::string::npos);
     EXPECT_NE(response.find("ucm:asu_transport_task_completion_duration_seconds_count 1"),
               std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_transport_task_queue_wait_total 4"), std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_transport_task_queue_wait_notified_total 4"),
+              std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_transport_task_queue_wait_timeout_total 7"),
+              std::string::npos);
     EXPECT_NE(response.find("ucm:asu_transport_task_queue_notify_total 5"), std::string::npos);
     EXPECT_NE(response.find("ucm:asu_fake_backend_task_queue_duration_seconds_count 1"),
               std::string::npos);

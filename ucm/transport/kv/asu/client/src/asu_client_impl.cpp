@@ -572,10 +572,13 @@ void AsuClientImpl::WorkerLoop()
         const auto queueStats = taskQueue_.TakeStats();
         const Metrics::BuiltinMetricUpdate queueUpdates[] = {
             {Metrics::MetricId::ClientTaskQueueDuration,
-             std::chrono::duration<double>(ctx->processingStartedAt - ctx->enqueuedAt).count()    },
-            {Metrics::MetricId::ClientTaskQueueWaits,    static_cast<double>(queueStats.waitCount)},
+             std::chrono::duration<double>(ctx->processingStartedAt - ctx->enqueuedAt).count()},
+            {Metrics::MetricId::ClientTaskQueueWaitNotified,
+             static_cast<double>(queueStats.waitNotifiedCount)                                },
+            {Metrics::MetricId::ClientTaskQueueWaitTimeouts,
+             static_cast<double>(queueStats.waitTimeoutCount)                                 },
             {Metrics::MetricId::ClientTaskQueueNotifies,
-             static_cast<double>(queueStats.notifyCount)                                          },
+             static_cast<double>(queueStats.notifyCount)                                      },
         };
         Metrics::UpdateBuiltinBatch(queueUpdates, std::size(queueUpdates));
         auto status = taskManager_.Process(ctx);

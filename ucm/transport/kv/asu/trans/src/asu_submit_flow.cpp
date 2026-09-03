@@ -154,14 +154,17 @@ void TransportTaskExecutor::SendSubBatchBuffers(
         const auto preSendAt = std::chrono::steady_clock::now();
         const Metrics::BuiltinMetricUpdate preSendUpdates[] = {
             {Metrics::MetricId::TransportTaskPreSendDuration,
-             std::chrono::duration<double>(preSendAt - task->submittedAt).count()                      },
+             std::chrono::duration<double>(preSendAt - task->submittedAt).count()                },
             {Metrics::MetricId::TransportTaskQueueDuration,
-             std::chrono::duration<double>(task->processingStartedAt - task->submittedAt).count()      },
+             std::chrono::duration<double>(task->processingStartedAt - task->submittedAt).count()},
             {Metrics::MetricId::TransportTaskProcessDuration,
-             std::chrono::duration<double>(preSendAt - task->processingStartedAt).count()              },
-            {Metrics::MetricId::TransportTaskQueueWaits,      static_cast<double>(task->queueWaitCount)},
+             std::chrono::duration<double>(preSendAt - task->processingStartedAt).count()        },
+            {Metrics::MetricId::TransportTaskQueueWaitNotified,
+             static_cast<double>(task->queueWaitNotifiedCount)                                   },
+            {Metrics::MetricId::TransportTaskQueueWaitTimeouts,
+             static_cast<double>(task->queueWaitTimeoutCount)                                    },
             {Metrics::MetricId::TransportTaskQueueNotifies,
-             static_cast<double>(task->queueNotifyCount)                                               },
+             static_cast<double>(task->queueNotifyCount)                                         },
         };
         Metrics::UpdateBuiltinBatch(preSendUpdates, std::size(preSendUpdates));
         task->NotifyPreSend();
