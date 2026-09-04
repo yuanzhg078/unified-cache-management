@@ -144,6 +144,53 @@ TEST(StandaloneMetricsTest, AggregatesMetricsWrittenByMultipleThreads)
     Shutdown();
 }
 
+TEST(StandaloneMetricsTest, DoesNotLoseUpdatesDuringConcurrentFlush)
+{
+    StandaloneMetricsConfig config;
+    config.port = FindUnusedLoopbackPort();
+    ASSERT_NE(config.port, 0);
+    config.aggregationIntervalMs = 1;
+
+    std::string error;
+    ASSERT_TRUE(Initialize(CreateStandaloneMetricsBackend(config), &error)) << error;
+
+    constexpr int kThreadCount = 4;
+    constexpr int kUpdatesPerThread = 2000;
+    constexpr int kExpectedUpdates = kThreadCount * kUpdatesPerThread;
+    std::atomic<int> finished{0};
+    std::vector<std::thread> writers;
+    writers.reserve(kThreadCount);
+    for (int thread = 0; thread < kThreadCount; ++thread) {
+        writers.emplace_back([&finished] {
+            const BuiltinMetricUpdate updates[] = {
+                {MetricId::StoreRequests, 1.0},
+                {MetricId::StoreSubmitDuration, 0.001},
+            };
+            for (int update = 0; update < kUpdatesPerThread; ++update) {
+                UpdateBuiltinBatch(updates, std::size(updates));
+            }
+            finished.fetch_add(1, std::memory_order_release);
+        });
+    }
+
+    while (finished.load(std::memory_order_acquire) != kThreadCount) {
+        Flush();
+        std::this_thread::yield();
+    }
+    for (auto& writer : writers) { writer.join(); }
+    Flush();
+
+    const auto response = HttpGet(config.port, config.metricsPath);
+    EXPECT_NE(response.find("ucm:asu_client_store_requests_total " +
+                            std::to_string(kExpectedUpdates)),
+              std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_client_store_submit_duration_seconds_count " +
+                            std::to_string(kExpectedUpdates)),
+              std::string::npos);
+
+    Shutdown();
+}
+
 TEST(StandaloneMetricsTest, UpdatesBuiltInMetricsInOneBatch)
 {
     StandaloneMetricsConfig config;

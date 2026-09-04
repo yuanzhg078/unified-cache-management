@@ -12,6 +12,8 @@
 
 本文以当前代码为准。核心结论是：**ASU 业务代码只依赖一套 metrics facade 和一套指标定义，运行宿主负责选择且只能选择一个 backend。**
 
+本文同时是 standalone/UCM 兼容性的唯一维护文档。原 standalone 兼容性指南中的方案推演、实施记录和当前架构已经合并到本文；历史设计不再与当前实现并列维护。
+
 ## 2. 总体设计
 
 ### 2.1 四层结构
@@ -25,7 +27,7 @@
                             │
 ┌───────────────────────────▼────────────────────────────────┐
 │ ASU Metrics Facade：libasu_metrics.so                       │
-│ Initialize / Shutdown / Add / Set / Observe / BatchUpdate  │
+│ Initialize / Shutdown / Add / Set / Observe / BuiltinBatch │
 │ 全进程共享一个当前 backend；未启用时是低成本 no-op           │
 └───────────────────────────┬────────────────────────────────┘
                             │ 启动时二选一
@@ -106,7 +108,64 @@ Prometheus --scrape--> kv-test:/metrics --query--> Grafana
 
 standalone backend 完全位于 ASU metrics 模块内，不依赖 `UC::Metrics`、Python `prometheus_client` 或 vLLM。
 
-### 3.2 启停与抓取时序
+### 3.2 当前 standalone 内部架构
+
+```text
+高频业务线程
+    Metrics::UpdateBuiltinBatch(updates, count)
+        │
+        ├─ atomic load gBackendFast（不增加 shared_ptr 引用计数）
+        ▼
+    StandaloneMetricsBackend::UpdateBuiltinBatch
+        │
+        ├─ TLS 命中 ThreadBuffer*（不执行 weak_ptr::lock）
+        ├─ WriteGuard 进入当前 write slot
+        ├─ 一次循环更新 N 个 MetricState
+        └─ WriteGuard 退出
+                │
+                │ 每个业务线程独占自己的 ThreadBuffer
+                ▼
+        ┌───────────────┬───────────────┐
+        │ DeltaSlot[0]  │ DeltaSlot[1]  │
+        └───────────────┴───────────────┘
+                ▲               ▲
+                └──── 交替写入 ─┘
+
+低频 aggregation thread
+    切换每个 ThreadBuffer 的 write slot
+      → 等待旧 slot 的正在写入者退出
+      → 合并旧 slot 到进程级累计 snapshot
+      → 清空旧 slot
+
+HTTP thread
+    GET /metrics → 只读累计 snapshot → Prometheus exposition
+```
+
+高频路径的关键实现如下：
+
+| 优化 | 当前实现 | 避免的开销 |
+| --- | --- | --- |
+| backend 快速访问 | `gBackend` 持有对象，`gBackendFast` 供打点线程执行一次 atomic raw-pointer load | 每次 `atomic_load(shared_ptr)` 的引用计数增减及共享 cache line 修改 |
+| 线程本地 buffer | TLS 缓存 `ThreadBuffer*`；collector 的 `buffers_` 用 `shared_ptr` 持有其生命周期 | 每次 `weak_ptr::lock()` 的原子引用计数操作 |
+| 双槽写入 | 每线程一个 `ThreadBuffer`，`WriteGuard` 用 `writeIndex/activeWriteIndex` 和 aggregator 握手 | 每次打点的 slot mutex lock/unlock |
+| 内置指标批量更新 | 一次 `UpdateBuiltinBatch()` 共用 backend 查询、TLS buffer 查询和一个 `WriteGuard` | 同一业务事件逐条打点造成的重复固定开销 |
+| Histogram 预聚合 | 写入时直接更新 interval bucket、`sum` 和 `count` | 保存并跨线程搬运无限增长的原始样本 |
+
+`WriteGuard` 与 aggregator 的协调过程是：
+
+1. writer 读取 `writeIndex`，把该槽写入 `activeWriteIndex`，再复查 `writeIndex`；如果期间发生切槽就撤销并重试；
+2. aggregator 用 `fetch_xor(1)` 把新写入切到另一个槽；
+3. aggregator 等待旧槽不再是 `activeWriteIndex`，然后安全合并和清空旧槽；
+4. 新到达的业务打点继续写新槽，不需要等待旧槽聚合。
+
+这个设计成立依赖两个条件：
+
+- 一个 `ThreadBuffer` 只能由创建它的业务线程写，aggregator 是唯一读取者；
+- 所有可能打点的业务线程必须先停止，再调用 `Metrics::Shutdown()`。`gBackendFast` 不持有对象，不能为任意并发 Shutdown 提供生命周期保护。
+
+collector generation 用来区分同一地址上先后创建的 collector，避免重新初始化后 TLS 把新 collector 误认为旧 collector 并复用悬空 buffer。`buffersMutex_` 只在某个线程第一次注册 buffer 时使用；`snapshotMutex_` 只协调低频聚合和 HTTP render，都不在每次打点的常规热路径上。
+
+### 3.3 启停与抓取时序
 
 ```mermaid
 sequenceDiagram
@@ -156,7 +215,7 @@ sequenceDiagram
 - `kv-test` 先关闭 ASU 业务线程，再 flush 和关闭 exporter，确保 completion 指标不会落在最后一次 drain 之后。
 - `config check` 只校验配置，不监听 metrics 端口。
 
-### 3.3 Standalone 配置
+### 3.4 Standalone 配置
 
 `asu_kv_test.conf` 控制 exporter 生命周期和固定标签：
 
@@ -176,7 +235,7 @@ metrics.shutdown_grace_ms=15000
 
 `metrics_configs.yaml` 是公共 exporter 定义，提供 `metric_prefix`、指标类型、HELP 文本和 Histogram buckets。standalone 会先注册编译期内置指标，再用 YAML 中的同名项覆盖文档和 buckets；YAML 未列出的内置指标继续使用编译期默认值，但把同名内置指标改成另一种类型会启动失败。为了和 UCM exporter 保持完全一致，公共 YAML 仍应列出全部 ASU 内置指标。
 
-### 3.4 短生命周期命令
+### 3.5 短生命周期命令
 
 Prometheus 是 pull 模型。`store`、`retrieve` 等单次命令可能在第一次 scrape 前退出，因此：
 
@@ -380,6 +439,8 @@ curl -s http://127.0.0.1:9108/metrics | grep '^ucm:asu_'
 
 至少检查：Counter 单调递增、Histogram `_count/_sum/_bucket` 合法、并发 scrape 不改变数值、final flush 后仍能看到完成指标。
 
+standalone collector 还必须通过“业务线程持续批量写入，同时另一线程高频 `Flush()`”的并发测试，并对 Counter 和 Histogram `_count` 做精确总数校验。这个测试覆盖 writer 进入旧槽与 aggregator 切槽重叠时可能发生的丢点窗口。
+
 ### 8.2 UCM/vLLM
 
 ```bash
@@ -402,6 +463,7 @@ curl -s http://127.0.0.1:8000/metrics | grep '^ucm:asu_'
 | 内置指标清单 | `ucm/transport/kv/asu/metrics/include/asu_metrics/metric_names.h` |
 | facade 生命周期 | `ucm/transport/kv/asu/metrics/src/metrics.cpp` |
 | standalone collector/exporter | `ucm/transport/kv/asu/metrics/src/standalone_metrics_backend.cpp` |
+| standalone 并发聚合测试 | `ucm/transport/kv/asu/test/metrics/standalone_metrics_test.cpp` |
 | UCM adapter | `ucm/transport/kv/asu/metrics/src/ucm_metrics_backend.cpp` |
 | kv-test metrics 生命周期 | `ucm/transport/kv/kv-test/src/kv_test_app.cpp` |
 | kv-test 配置解析 | `ucm/transport/kv/kv-test/src/kv_test_config_loader.cpp` |

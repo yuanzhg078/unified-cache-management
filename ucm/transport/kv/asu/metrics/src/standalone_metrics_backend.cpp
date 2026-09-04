@@ -329,9 +329,8 @@ public:
         std::size_t id = 0;
         if (!FindMetric(name, id) || descriptors_[id].type != MetricType::COUNTER) { return; }
         auto buffer = GetThreadBuffer();
-        const auto slot = buffer->writeIndex.load(std::memory_order_acquire);
-        std::lock_guard<std::mutex> lock{buffer->slots[slot].mutex};
-        buffer->slots[slot].metrics[id].value += delta;
+        ThreadBuffer::WriteGuard guard{*buffer};
+        buffer->slots[guard.Index()].metrics[id].value += delta;
     }
 
     void Set(std::string_view name, double value) noexcept
@@ -340,9 +339,8 @@ public:
         std::size_t id = 0;
         if (!FindMetric(name, id) || descriptors_[id].type != MetricType::GAUGE) { return; }
         auto buffer = GetThreadBuffer();
-        const auto slot = buffer->writeIndex.load(std::memory_order_acquire);
-        std::lock_guard<std::mutex> lock{buffer->slots[slot].mutex};
-        auto& metric = buffer->slots[slot].metrics[id];
+        ThreadBuffer::WriteGuard guard{*buffer};
+        auto& metric = buffer->slots[guard.Index()].metrics[id];
         metric.value = value;
         metric.sequence = gaugeSequence_.fetch_add(1, std::memory_order_relaxed) + 1;
         metric.hasGaugeValue = true;
@@ -354,9 +352,8 @@ public:
         std::size_t id = 0;
         if (!FindMetric(name, id) || descriptors_[id].type != MetricType::HISTOGRAM) { return; }
         auto buffer = GetThreadBuffer();
-        const auto slot = buffer->writeIndex.load(std::memory_order_acquire);
-        std::lock_guard<std::mutex> lock{buffer->slots[slot].mutex};
-        auto& metric = buffer->slots[slot].metrics[id];
+        ThreadBuffer::WriteGuard guard{*buffer};
+        auto& metric = buffer->slots[guard.Index()].metrics[id];
         metric.sum += value;
         ++metric.count;
         const auto& buckets = descriptors_[id].buckets;
@@ -369,14 +366,14 @@ public:
     {
         if (updates == nullptr || count == 0) { return; }
         auto buffer = GetThreadBuffer();
-        const auto slot = buffer->writeIndex.load(std::memory_order_acquire);
-        std::lock_guard<std::mutex> lock{buffer->slots[slot].mutex};
+        ThreadBuffer::WriteGuard guard{*buffer};
+        auto& metrics = buffer->slots[guard.Index()].metrics;
         for (std::size_t updateIndex = 0; updateIndex < count; ++updateIndex) {
             const auto builtinIndex = ToIndex(updates[updateIndex].id);
             if (builtinIndex >= kBuiltinMetricCount) { continue; }
             const auto id = builtinMetricIds_[builtinIndex];
             if (id == kInvalidMetricId) { continue; }
-            ApplyUpdate(buffer->slots[slot].metrics[id], id, updates[updateIndex].value);
+            ApplyUpdate(metrics[id], id, updates[updateIndex].value);
         }
     }
 
@@ -441,11 +438,32 @@ private:
     };
 
     struct DeltaSlot {
-        std::mutex mutex;
         std::vector<MetricState> metrics;
     };
 
     struct ThreadBuffer {
+        static constexpr int kNoActiveWriter = -1;
+
+        // A ThreadBuffer has exactly one business-thread writer. The aggregator
+        // only consumes the slot after switching writers away from it.
+        class WriteGuard {
+        public:
+            explicit WriteGuard(ThreadBuffer& buffer)
+                : buffer_(buffer), index_(buffer_.BeginWrite())
+            {}
+
+            ~WriteGuard() { buffer_.EndWrite(); }
+
+            WriteGuard(const WriteGuard&) = delete;
+            WriteGuard& operator=(const WriteGuard&) = delete;
+
+            int Index() const noexcept { return index_; }
+
+        private:
+            ThreadBuffer& buffer_;
+            int index_;
+        };
+
         explicit ThreadBuffer(const std::vector<MetricDescriptor>& descriptors)
         {
             for (auto& slot : slots) {
@@ -456,13 +474,42 @@ private:
             }
         }
 
+        int BeginWrite() noexcept
+        {
+            while (true) {
+                const int index = writeIndex.load(std::memory_order_acquire);
+                activeWriteIndex.store(index, std::memory_order_release);
+                if (writeIndex.load(std::memory_order_acquire) == index) { return index; }
+                activeWriteIndex.store(kNoActiveWriter, std::memory_order_release);
+            }
+        }
+
+        void EndWrite() noexcept
+        {
+            activeWriteIndex.store(kNoActiveWriter, std::memory_order_release);
+        }
+
+        int SwitchWriteSlot() noexcept
+        {
+            return writeIndex.fetch_xor(1, std::memory_order_acq_rel);
+        }
+
+        void WaitUntilInactive(int index) const noexcept
+        {
+            while (activeWriteIndex.load(std::memory_order_acquire) == index) {
+                std::this_thread::yield();
+            }
+        }
+
         std::atomic<int> writeIndex{0};
+        std::atomic<int> activeWriteIndex{kNoActiveWriter};
         DeltaSlot slots[2];
     };
 
     struct ThreadLocalBufferCache {
         const ThreadBufferedMetricsCollector* owner{nullptr};
-        std::weak_ptr<ThreadBuffer> buffer;
+        std::uint64_t ownerGeneration{0};
+        ThreadBuffer* buffer{nullptr};
     };
 
     static constexpr std::size_t kInvalidMetricId = std::numeric_limits<std::size_t>::max();
@@ -508,20 +555,29 @@ private:
         }
     }
 
-    std::shared_ptr<ThreadBuffer> GetThreadBuffer()
+    static std::uint64_t NextCollectorGeneration() noexcept
+    {
+        static std::atomic<std::uint64_t> generation{0};
+        return generation.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
+
+    ThreadBuffer* GetThreadBuffer()
     {
         static thread_local ThreadLocalBufferCache cache;
-        if (cache.owner == this) {
-            if (auto buffer = cache.buffer.lock()) { return buffer; }
+        if (cache.owner == this && cache.ownerGeneration == generation_ &&
+            cache.buffer != nullptr) {
+            return cache.buffer;
         }
         auto buffer = std::make_shared<ThreadBuffer>(descriptors_);
+        auto* const rawBuffer = buffer.get();
         {
             std::lock_guard<std::mutex> lock{buffersMutex_};
-            buffers_.emplace_back(buffer);
+            buffers_.emplace_back(std::move(buffer));
         }
         cache.owner = this;
-        cache.buffer = buffer;
-        return buffer;
+        cache.ownerGeneration = generation_;
+        cache.buffer = rawBuffer;
+        return rawBuffer;
     }
 
     void AggregatorLoop()
@@ -548,8 +604,8 @@ private:
         }
         std::unique_lock<std::shared_mutex> snapshotLock{snapshotMutex_};
         for (const auto& buffer : buffers) {
-            const int oldSlot = buffer->writeIndex.fetch_xor(1, std::memory_order_acq_rel);
-            std::lock_guard<std::mutex> slotLock{buffer->slots[oldSlot].mutex};
+            const int oldSlot = buffer->SwitchWriteSlot();
+            buffer->WaitUntilInactive(oldSlot);
             auto& source = buffer->slots[oldSlot].metrics;
             for (std::size_t id = 0; id < source.size(); ++id) {
                 auto& from = source[id];
@@ -612,6 +668,7 @@ private:
     }
 
     std::vector<MetricDescriptor> descriptors_;
+    const std::uint64_t generation_{NextCollectorGeneration()};
     std::unordered_map<std::string, std::size_t> metricIds_;
     std::array<std::size_t, kBuiltinMetricCount> builtinMetricIds_ = [] {
         std::array<std::size_t, kBuiltinMetricCount> ids{};

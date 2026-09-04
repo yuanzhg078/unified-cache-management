@@ -9,7 +9,10 @@ namespace {
 
 std::mutex gBackendMutex;
 std::shared_ptr<MetricsBackend> gBackend;
-std::atomic<bool> gEnabled{false};
+// The owner is retained in gBackend. Business threads use the raw pointer to avoid
+// shared_ptr reference-count traffic on every metric update. The lifecycle contract
+// requires all business threads to stop before Shutdown().
+std::atomic<MetricsBackend*> gBackendFast{nullptr};
 
 class NoopMetricsBackend final : public MetricsBackend {
 public:
@@ -26,6 +29,11 @@ public:
 std::shared_ptr<MetricsBackend> LoadBackend()
 {
     return std::atomic_load_explicit(&gBackend, std::memory_order_acquire);
+}
+
+MetricsBackend* LoadBackendFast() noexcept
+{
+    return gBackendFast.load(std::memory_order_acquire);
 }
 
 }  // namespace
@@ -46,14 +54,15 @@ bool Initialize(std::shared_ptr<MetricsBackend> backend, std::string* error)
         if (error != nullptr) { *error = backend->LastError(); }
         return false;
     }
+    auto* const backendFast = backend.get();
     std::atomic_store_explicit(&gBackend, std::move(backend), std::memory_order_release);
-    gEnabled.store(true, std::memory_order_release);
+    gBackendFast.store(backendFast, std::memory_order_release);
     return true;
 }
 
 void Shutdown()
 {
-    gEnabled.store(false, std::memory_order_release);
+    gBackendFast.store(nullptr, std::memory_order_release);
     std::shared_ptr<MetricsBackend> backend;
     {
         std::lock_guard<std::mutex> lock{gBackendMutex};
@@ -72,7 +81,7 @@ void Flush()
     if (backend) { backend->Flush(); }
 }
 
-bool IsEnabled() noexcept { return gEnabled.load(std::memory_order_acquire); }
+bool IsEnabled() noexcept { return LoadBackendFast() != nullptr; }
 
 MetricTimer StartTimer() noexcept
 {
@@ -82,29 +91,26 @@ MetricTimer StartTimer() noexcept
 
 void Add(std::string_view name, double delta) noexcept
 {
-    if (!IsEnabled()) { return; }
-    auto backend = LoadBackend();
+    auto* backend = LoadBackendFast();
     if (backend) { backend->Add(name, delta); }
 }
 
 void Set(std::string_view name, double value) noexcept
 {
-    if (!IsEnabled()) { return; }
-    auto backend = LoadBackend();
+    auto* backend = LoadBackendFast();
     if (backend) { backend->Set(name, value); }
 }
 
 void Observe(std::string_view name, double value) noexcept
 {
-    if (!IsEnabled()) { return; }
-    auto backend = LoadBackend();
+    auto* backend = LoadBackendFast();
     if (backend) { backend->Observe(name, value); }
 }
 
 void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates, std::size_t count) noexcept
 {
-    if (updates == nullptr || count == 0 || !IsEnabled()) { return; }
-    auto backend = LoadBackend();
+    if (updates == nullptr || count == 0) { return; }
+    auto* backend = LoadBackendFast();
     if (backend) { backend->UpdateBuiltinBatch(updates, count); }
 }
 
