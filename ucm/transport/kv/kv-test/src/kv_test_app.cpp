@@ -9,6 +9,7 @@
 #include <thread>
 #include <unordered_map>
 #include "asu_metrics/metrics.h"
+#include "asu_metrics/standalone_metrics_backend.h"
 #include "kv_test/asu_runtime_proxy.h"
 #include "kv_test/kv_test_config_helpers.h"
 #include "kv_test/payload_buffer_runtime.h"

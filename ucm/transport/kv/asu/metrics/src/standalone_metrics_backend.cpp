@@ -1,16 +1,9 @@
-#include "asu_metrics/metrics.h"
-
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <unistd.h>
-
 #include <algorithm>
+#include <arpa/inet.h>
 #include <array>
 #include <atomic>
-#include <cerrno>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -18,19 +11,22 @@
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
-#include <limits>
+#include <netdb.h>
 #include <shared_mutex>
 #include <sstream>
 #include <string>
+#include <sys/socket.h>
+#include <sys/time.h>
 #include <thread>
+#include <unistd.h>
 #include <unordered_map>
 #include <utility>
 #include <vector>
-
-#include "asu_metrics/metric_names.h"
+#include "asu_metrics/standalone_metrics_backend.h"
 
 namespace UC::ASU::Metrics {
 namespace {
@@ -103,9 +99,8 @@ bool IsValidMetricName(const std::string& name)
     if (name.empty()) { return false; }
     const auto first = static_cast<unsigned char>(name.front());
     if (!(std::isalpha(first) || name.front() == '_' || name.front() == ':')) { return false; }
-    return std::all_of(name.begin() + 1, name.end(), [](unsigned char ch) {
-        return std::isalnum(ch) || ch == '_' || ch == ':';
-    });
+    return std::all_of(name.begin() + 1, name.end(),
+                       [](unsigned char ch) { return std::isalnum(ch) || ch == '_' || ch == ':'; });
 }
 
 std::string EscapeHelp(const std::string& value)
@@ -152,38 +147,11 @@ const char* PrometheusTypeName(MetricType type)
     }
 }
 
-MetricDescriptor Counter(std::string_view name, std::string documentation)
-{
-    return {std::string{name}, MetricType::COUNTER, std::move(documentation), {}};
-}
-
-MetricDescriptor Gauge(std::string_view name, std::string documentation)
-{
-    return {std::string{name}, MetricType::GAUGE, std::move(documentation), {}};
-}
-
-MetricDescriptor Histogram(std::string_view name, std::string documentation)
-{
-    return {std::string{name}, MetricType::HISTOGRAM, std::move(documentation),
-            {0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0}};
-}
-
-MetricDescriptor MakeBuiltinDescriptor(std::string_view name, MetricType type,
-                                       std::string documentation)
-{
-    switch (type) {
-        case MetricType::COUNTER: return Counter(name, std::move(documentation));
-        case MetricType::GAUGE: return Gauge(name, std::move(documentation));
-        case MetricType::HISTOGRAM: return Histogram(name, std::move(documentation));
-    }
-    return {};
-}
-
 MetricType BuiltinMetricType(MetricId id)
 {
     switch (id) {
 #define ASU_BUILTIN_METRIC_TYPE_CASE(metricId, name, type, documentation) \
-        case MetricId::metricId: return MetricType::type;
+    case MetricId::metricId: return MetricType::type;
         ASU_BUILTIN_METRIC_LIST(ASU_BUILTIN_METRIC_TYPE_CASE)
 #undef ASU_BUILTIN_METRIC_TYPE_CASE
         case MetricId::COUNT: break;
@@ -217,9 +185,9 @@ bool LoadYamlDefinitions(const std::string& path, std::string& metricPrefix,
         if (content == "counter:" || content == "gauge:" || content == "histogram:") {
             inMetricSection = true;
             current = nullptr;
-            sectionType = content == "counter:"   ? MetricType::COUNTER
-                          : content == "gauge:"   ? MetricType::GAUGE
-                                                   : MetricType::HISTOGRAM;
+            sectionType = content == "counter:" ? MetricType::COUNTER
+                          : content == "gauge:" ? MetricType::GAUGE
+                                                : MetricType::HISTOGRAM;
             continue;
         }
         if (!rawLine.empty() && rawLine.front() != ' ' && rawLine.front() != '\t') {
@@ -239,12 +207,10 @@ bool LoadYamlDefinitions(const std::string& path, std::string& metricPrefix,
         }
         if (current == nullptr) { continue; }
         if (content.rfind("documentation:", 0) == 0) {
-            current->documentation =
-                Unquote(content.substr(std::strlen("documentation:")));
+            current->documentation = Unquote(content.substr(std::strlen("documentation:")));
         } else if (content.rfind("buckets:", 0) == 0) {
             if (!ParseBuckets(content.substr(std::strlen("buckets:")), current->buckets)) {
-                error = "invalid histogram buckets at " + path + ":" +
-                        std::to_string(lineNumber);
+                error = "invalid histogram buckets at " + path + ":" + std::to_string(lineNumber);
                 return false;
             }
         }
@@ -292,7 +258,8 @@ public:
     bool BindBuiltinMetricIds(std::string& error)
     {
         for (std::size_t index = 0; index < kBuiltinMetricCount; ++index) {
-            const auto iter = metricIds_.find(std::string{MetricName(static_cast<MetricId>(index))});
+            const auto iter =
+                metricIds_.find(std::string{MetricName(static_cast<MetricId>(index))});
             if (iter == metricIds_.end()) {
                 error = "missing built-in metric: " +
                         std::string{MetricName(static_cast<MetricId>(index))};
@@ -323,43 +290,14 @@ public:
         Aggregate();
     }
 
-    void Add(std::string_view name, double delta) noexcept
-    {
-        if (!std::isfinite(delta) || delta < 0.0) { return; }
-        std::size_t id = 0;
-        if (!FindMetric(name, id) || descriptors_[id].type != MetricType::COUNTER) { return; }
-        auto buffer = GetThreadBuffer();
-        ThreadBuffer::WriteGuard guard{*buffer};
-        buffer->slots[guard.Index()].metrics[id].value += delta;
-    }
-
-    void Set(std::string_view name, double value) noexcept
+    void Update(std::string_view name, double value) noexcept
     {
         if (!std::isfinite(value)) { return; }
         std::size_t id = 0;
-        if (!FindMetric(name, id) || descriptors_[id].type != MetricType::GAUGE) { return; }
+        if (!FindMetric(name, id)) { return; }
         auto buffer = GetThreadBuffer();
         ThreadBuffer::WriteGuard guard{*buffer};
-        auto& metric = buffer->slots[guard.Index()].metrics[id];
-        metric.value = value;
-        metric.sequence = gaugeSequence_.fetch_add(1, std::memory_order_relaxed) + 1;
-        metric.hasGaugeValue = true;
-    }
-
-    void Observe(std::string_view name, double value) noexcept
-    {
-        if (!std::isfinite(value)) { return; }
-        std::size_t id = 0;
-        if (!FindMetric(name, id) || descriptors_[id].type != MetricType::HISTOGRAM) { return; }
-        auto buffer = GetThreadBuffer();
-        ThreadBuffer::WriteGuard guard{*buffer};
-        auto& metric = buffer->slots[guard.Index()].metrics[id];
-        metric.sum += value;
-        ++metric.count;
-        const auto& buckets = descriptors_[id].buckets;
-        const auto bucket = static_cast<std::size_t>(
-            std::lower_bound(buckets.begin(), buckets.end(), value) - buckets.begin());
-        ++metric.bucketCounts[bucket];
+        ApplyUpdate(buffer->slots[guard.Index()].metrics[id], id, value);
     }
 
     void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates, std::size_t count) noexcept
@@ -404,8 +342,7 @@ public:
             const auto& state = snapshot_[id];
             const auto fullName = prefix + descriptor.name;
             output << "# HELP " << fullName << ' ' << EscapeHelp(descriptor.documentation) << '\n';
-            output << "# TYPE " << fullName << ' ' << PrometheusTypeName(descriptor.type)
-                   << '\n';
+            output << "# TYPE " << fullName << ' ' << PrometheusTypeName(descriptor.type) << '\n';
             if (descriptor.type == MetricType::HISTOGRAM) {
                 std::uint64_t cumulative = 0;
                 for (std::size_t index = 0; index < descriptor.buckets.size(); ++index) {
@@ -450,7 +387,8 @@ private:
         public:
             explicit WriteGuard(ThreadBuffer& buffer)
                 : buffer_(buffer), index_(buffer_.BeginWrite())
-            {}
+            {
+            }
 
             ~WriteGuard() { buffer_.EndWrite(); }
 
@@ -692,7 +630,8 @@ class MetricsHttpServer {
 public:
     MetricsHttpServer(ThreadBufferedMetricsCollector& registry, StandaloneMetricsConfig config)
         : registry_(registry), config_(std::move(config))
-    {}
+    {
+    }
 
     ~MetricsHttpServer() { Stop(); }
 
@@ -700,17 +639,16 @@ public:
     {
         if (running_.load(std::memory_order_acquire)) { return true; }
 
-        struct addrinfo hints {};
+        struct addrinfo hints{};
         hints.ai_family = AF_UNSPEC;
         hints.ai_socktype = SOCK_STREAM;
         hints.ai_flags = AI_NUMERICSERV;
         struct addrinfo* addresses = nullptr;
         const auto portText = std::to_string(config_.port);
-        const auto rc = getaddrinfo(config_.listenAddress.c_str(), portText.c_str(), &hints,
-                                    &addresses);
+        const auto rc =
+            getaddrinfo(config_.listenAddress.c_str(), portText.c_str(), &hints, &addresses);
         if (rc != 0) {
-            error = "failed to resolve metrics listen address: " +
-                    std::string{gai_strerror(rc)};
+            error = "failed to resolve metrics listen address: " + std::string{gai_strerror(rc)};
             return false;
         }
 
@@ -777,7 +715,9 @@ private:
         if (received <= 0) { return; }
         request[received] = '\0';
 
-        std::istringstream requestLine{std::string{request, static_cast<std::size_t>(received)}};
+        std::istringstream requestLine{
+            std::string{request, static_cast<std::size_t>(received)}
+        };
         std::string method;
         std::string path;
         std::string version;
@@ -831,9 +771,9 @@ private:
 
 class StandaloneMetricsBackend final : public MetricsBackend {
 public:
-    explicit StandaloneMetricsBackend(StandaloneMetricsConfig config)
-        : config_(std::move(config))
-    {}
+    explicit StandaloneMetricsBackend(StandaloneMetricsConfig config) : config_(std::move(config))
+    {
+    }
 
     bool Start() override
     {
@@ -884,20 +824,11 @@ public:
         return true;
     }
 
-    void Add(std::string_view name, double delta) noexcept override
+    void Update(std::string_view name, double value) noexcept override
     {
-        if (collector_) { collector_->Add(name, delta); }
+        if (collector_) { collector_->Update(name, value); }
     }
-    void Set(std::string_view name, double value) noexcept override
-    {
-        if (collector_) { collector_->Set(name, value); }
-    }
-    void Observe(std::string_view name, double value) noexcept override
-    {
-        if (collector_) { collector_->Observe(name, value); }
-    }
-    void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates,
-                            std::size_t count) noexcept override
+    void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates, std::size_t count) noexcept override
     {
         if (collector_) { collector_->UpdateBuiltinBatch(updates, count); }
     }
@@ -927,17 +858,6 @@ private:
 };
 
 }  // namespace
-
-std::vector<MetricDescriptor> DefaultAsuMetricDescriptors()
-{
-    std::vector<MetricDescriptor> descriptors;
-    descriptors.reserve(kBuiltinMetricCount);
-#define ASU_APPEND_BUILTIN_DESCRIPTOR(id, name, type, documentation) \
-    descriptors.emplace_back(MakeBuiltinDescriptor(name, MetricType::type, documentation));
-    ASU_BUILTIN_METRIC_LIST(ASU_APPEND_BUILTIN_DESCRIPTOR)
-#undef ASU_APPEND_BUILTIN_DESCRIPTOR
-    return descriptors;
-}
 
 std::shared_ptr<MetricsBackend> CreateStandaloneMetricsBackend(StandaloneMetricsConfig config)
 {

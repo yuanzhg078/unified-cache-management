@@ -13,6 +13,7 @@
 #include <vector>
 #include "asu_metrics/metric_names.h"
 #include "asu_metrics/metrics.h"
+#include "asu_metrics/standalone_metrics_backend.h"
 #include "client_task_manager.h"
 
 namespace UC::ASU::Metrics {
@@ -66,9 +67,7 @@ std::string HttpGet(std::uint16_t port, const std::string& path)
 class RecordingMetricsBackend final : public MetricsBackend {
 public:
     bool Start() override { return true; }
-    void Add(std::string_view, double) noexcept override {}
-    void Set(std::string_view, double) noexcept override {}
-    void Observe(std::string_view, double) noexcept override {}
+    void Update(std::string_view, double) noexcept override {}
     void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates, std::size_t count) noexcept override
     {
         for (std::size_t index = 0; index < count && recordedCount < recordedUpdates.size();
@@ -96,8 +95,9 @@ TEST(StandaloneMetricsTest, ExposesCounterGaugeAndHistogramInPrometheusFormat)
     std::string error;
     ASSERT_TRUE(Initialize(CreateStandaloneMetricsBackend(config), &error)) << error;
 
-    Add(Names::StoreRequests, 2.0);
-    Observe(Names::StoreSubmitDuration, 0.002);
+    Update(Names::StoreRequests, 2.0);
+    Update(Names::StoreSubmitDuration, 0.002);
+    Update(Names::ExporterUp, 2.0);
     Flush();
 
     const auto response = HttpGet(config.port, config.metricsPath);
@@ -107,7 +107,7 @@ TEST(StandaloneMetricsTest, ExposesCounterGaugeAndHistogramInPrometheusFormat)
     EXPECT_NE(
         response.find("ucm:asu_client_store_submit_duration_seconds_count{source=\"test\"} 1"),
         std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_metrics_exporter_up{source=\"test\"} 1"), std::string::npos);
+    EXPECT_NE(response.find("ucm:asu_metrics_exporter_up{source=\"test\"} 2"), std::string::npos);
 
     Shutdown();
 }
@@ -128,8 +128,8 @@ TEST(StandaloneMetricsTest, AggregatesMetricsWrittenByMultipleThreads)
     for (int thread = 0; thread < kThreadCount; ++thread) {
         writers.emplace_back([] {
             for (int update = 0; update < kUpdatesPerThread; ++update) {
-                Add(Names::StoreRequests, 1.0);
-                Observe(Names::StoreSubmitDuration, 0.002);
+                Update(Names::StoreRequests, 1.0);
+                Update(Names::StoreSubmitDuration, 0.002);
             }
         });
     }
@@ -163,7 +163,7 @@ TEST(StandaloneMetricsTest, DoesNotLoseUpdatesDuringConcurrentFlush)
     for (int thread = 0; thread < kThreadCount; ++thread) {
         writers.emplace_back([&finished] {
             const BuiltinMetricUpdate updates[] = {
-                {MetricId::StoreRequests, 1.0},
+                {MetricId::StoreRequests,       1.0  },
                 {MetricId::StoreSubmitDuration, 0.001},
             };
             for (int update = 0; update < kUpdatesPerThread; ++update) {
@@ -181,9 +181,9 @@ TEST(StandaloneMetricsTest, DoesNotLoseUpdatesDuringConcurrentFlush)
     Flush();
 
     const auto response = HttpGet(config.port, config.metricsPath);
-    EXPECT_NE(response.find("ucm:asu_client_store_requests_total " +
-                            std::to_string(kExpectedUpdates)),
-              std::string::npos);
+    EXPECT_NE(
+        response.find("ucm:asu_client_store_requests_total " + std::to_string(kExpectedUpdates)),
+        std::string::npos);
     EXPECT_NE(response.find("ucm:asu_client_store_submit_duration_seconds_count " +
                             std::to_string(kExpectedUpdates)),
               std::string::npos);
@@ -305,8 +305,8 @@ TEST(StandaloneMetricsTest, RejectsBuiltinMetricTypeOverride)
 
 TEST(StandaloneMetricsTest, RejectsASecondBackendUntilShutdown)
 {
-    auto first = CreateNoopMetricsBackend();
-    auto second = CreateNoopMetricsBackend();
+    auto first = std::make_shared<RecordingMetricsBackend>();
+    auto second = std::make_shared<RecordingMetricsBackend>();
     std::string error;
     ASSERT_TRUE(Initialize(std::move(first), &error));
     EXPECT_FALSE(Initialize(std::move(second), &error));

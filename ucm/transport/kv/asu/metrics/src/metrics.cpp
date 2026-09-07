@@ -1,5 +1,4 @@
 #include "asu_metrics/metrics.h"
-
 #include <atomic>
 #include <mutex>
 #include <utility>
@@ -14,27 +13,27 @@ std::shared_ptr<MetricsBackend> gBackend;
 // requires all business threads to stop before Shutdown().
 std::atomic<MetricsBackend*> gBackendFast{nullptr};
 
-class NoopMetricsBackend final : public MetricsBackend {
-public:
-    bool Start() override { return true; }
-    void Add(std::string_view, double) noexcept override {}
-    void Set(std::string_view, double) noexcept override {}
-    void Observe(std::string_view, double) noexcept override {}
-    void UpdateBuiltinBatch(const BuiltinMetricUpdate*, std::size_t) noexcept override {}
-    void Flush() override {}
-    void Stop() override {}
-    std::string LastError() const override { return {}; }
-};
+MetricDescriptor MakeBuiltinDescriptor(std::string_view name, MetricType type,
+                                       std::string documentation)
+{
+    switch (type) {
+        case MetricType::COUNTER:
+        case MetricType::GAUGE: return {std::string{name}, type, std::move(documentation), {}};
+        case MetricType::HISTOGRAM:
+            return {std::string{name},
+                    type,
+                    std::move(documentation),
+                    {0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0}};
+    }
+    return {};
+}
 
 std::shared_ptr<MetricsBackend> LoadBackend()
 {
     return std::atomic_load_explicit(&gBackend, std::memory_order_acquire);
 }
 
-MetricsBackend* LoadBackendFast() noexcept
-{
-    return gBackendFast.load(std::memory_order_acquire);
-}
+MetricsBackend* LoadBackendFast() noexcept { return gBackendFast.load(std::memory_order_acquire); }
 
 }  // namespace
 
@@ -89,22 +88,10 @@ MetricTimer StartTimer() noexcept
     return {std::chrono::steady_clock::now(), true};
 }
 
-void Add(std::string_view name, double delta) noexcept
+void Update(std::string_view name, double value) noexcept
 {
     auto* backend = LoadBackendFast();
-    if (backend) { backend->Add(name, delta); }
-}
-
-void Set(std::string_view name, double value) noexcept
-{
-    auto* backend = LoadBackendFast();
-    if (backend) { backend->Set(name, value); }
-}
-
-void Observe(std::string_view name, double value) noexcept
-{
-    auto* backend = LoadBackendFast();
-    if (backend) { backend->Observe(name, value); }
+    if (backend) { backend->Update(name, value); }
 }
 
 void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates, std::size_t count) noexcept
@@ -114,9 +101,15 @@ void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates, std::size_t count) n
     if (backend) { backend->UpdateBuiltinBatch(updates, count); }
 }
 
-std::shared_ptr<MetricsBackend> CreateNoopMetricsBackend()
+std::vector<MetricDescriptor> DefaultAsuMetricDescriptors()
 {
-    return std::make_shared<NoopMetricsBackend>();
+    std::vector<MetricDescriptor> descriptors;
+    descriptors.reserve(kBuiltinMetricCount);
+#define ASU_APPEND_BUILTIN_DESCRIPTOR(id, name, type, documentation) \
+    descriptors.emplace_back(MakeBuiltinDescriptor(name, MetricType::type, documentation));
+    ASU_BUILTIN_METRIC_LIST(ASU_APPEND_BUILTIN_DESCRIPTOR)
+#undef ASU_APPEND_BUILTIN_DESCRIPTOR
+    return descriptors;
 }
 
 }  // namespace UC::ASU::Metrics
