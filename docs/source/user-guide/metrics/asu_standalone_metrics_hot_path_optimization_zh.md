@@ -236,7 +236,7 @@ collector 仍通过 `buffers_` 中的 `shared_ptr<ThreadBuffer>` 持有 buffer�
 
 同一个业务事件通常会同时产生多条指标。例如一次提交可能同时更新 request、entry、error 和 duration。
 
-如果逐条调用 `Add()` 或 `Observe()`，每条指标都要重复执行：
+如果逐条调用 `Update()`，每条指标都要重复执行：
 
 - facade backend 查询；
 - backend 虚函数调用；

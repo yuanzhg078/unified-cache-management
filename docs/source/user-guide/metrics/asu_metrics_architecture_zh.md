@@ -27,7 +27,7 @@
                             │
 ┌───────────────────────────▼────────────────────────────────┐
 │ ASU Metrics Facade：libasu_metrics.so                       │
-│ Initialize / Shutdown / Add / Set / Observe / BuiltinBatch │
+│ Initialize / Shutdown / Update / BuiltinBatch               │
 │ 全进程共享一个当前 backend；未启用时是低成本 no-op           │
 └───────────────────────────┬────────────────────────────────┘
                             │ 启动时二选一
@@ -64,6 +64,15 @@ ASU 可以作为独立 transport/client 交付，不应强制依赖 UCM、Python
 ```cpp
 Metrics::UpdateBuiltinBatch(updates, count);
 ```
+
+字符串指标使用 `Metrics::Update(name, value)`。指标在启动时由 `MetricDescriptor` 注册，
+descriptor 的类型决定更新语义：`COUNTER` 累加、`GAUGE` 覆盖、`HISTOGRAM` 记录样本。
+这与 UCM metrics 的 `UpdateStats(name, value)` 保持一致。
+
+| facade 接口 | 适用对象 | Standalone backend | UCM adapter backend |
+| --- | --- | --- | --- |
+| `Update(name, value)` | 已注册的字符串指标 | 查 descriptor 后按类型更新线程本地 buffer | 转发为 `UC::Metrics::UpdateStats(name, value)` |
+| `UpdateBuiltinBatch(updates, count)` | `MetricId` 内置指标的高频路径 | 一次取得 thread buffer 并更新整批指标 | 按 `MetricId` 映射名称后逐项调用 `UpdateStats` |
 
 宿主在启动时决定数据流向：
 
