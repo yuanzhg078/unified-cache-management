@@ -737,10 +737,6 @@ private:
             status = "200 OK";
             contentType = "text/plain; version=0.0.4; charset=utf-8";
             body = registry_.Render(config_.metricPrefix, config_.constantLabels);
-        } else if (path == config_.healthPath) {
-            status = "200 OK";
-            contentType = "text/plain; charset=utf-8";
-            body = "ok\n";
         } else {
             status = "404 Not Found";
             contentType = "text/plain; charset=utf-8";
@@ -781,9 +777,6 @@ public:
         for (auto& descriptor : DefaultAsuMetricDescriptors()) {
             descriptors[descriptor.name] = std::move(descriptor);
         }
-        for (auto& descriptor : config_.descriptors) {
-            descriptors[descriptor.name] = std::move(descriptor);
-        }
 
         if (!config_.definitionPath.empty()) {
             std::vector<MetricDescriptor> configured;
@@ -795,9 +788,8 @@ public:
                 descriptors[descriptor.name] = std::move(descriptor);
             }
         }
-        if (config_.metricsPath.empty() || config_.metricsPath.front() != '/' ||
-            config_.healthPath.empty() || config_.healthPath.front() != '/') {
-            error_ = "metrics and health paths must start with '/'";
+        if (config_.metricsPath.empty() || config_.metricsPath.front() != '/') {
+            error_ = "metrics path must start with '/'";
             return false;
         }
 

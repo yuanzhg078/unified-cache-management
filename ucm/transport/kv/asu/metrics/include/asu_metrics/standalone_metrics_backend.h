@@ -15,10 +15,8 @@ struct StandaloneMetricsConfig {
     std::string listenAddress{"127.0.0.1"};
     std::uint16_t port{9108};
     std::string metricsPath{"/metrics"};
-    std::string healthPath{"/health"};
     std::uint32_t aggregationIntervalMs{500};
     std::map<std::string, std::string> constantLabels;
-    std::vector<MetricDescriptor> descriptors;
 };
 
 std::shared_ptr<MetricsBackend> CreateStandaloneMetricsBackend(StandaloneMetricsConfig config);

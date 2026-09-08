@@ -38,7 +38,6 @@ public:
         backendConfig.listenAddress = config.listenAddress;
         backendConfig.port = config.port;
         backendConfig.metricsPath = config.path;
-        backendConfig.healthPath = config.healthPath;
         backendConfig.aggregationIntervalMs = config.aggregationIntervalMs;
         backendConfig.constantLabels = {
             {"model_name", config.modelName},

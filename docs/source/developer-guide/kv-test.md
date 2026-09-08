@@ -221,7 +221,6 @@ metrics.config_path=./examples/metrics/metrics_configs.yaml
 metrics.listen_address=127.0.0.1
 metrics.port=9108
 metrics.path=/metrics
-metrics.health_path=/health
 metrics.source=kv-test
 metrics.model_name=standalone
 metrics.worker_id=asu-0
@@ -277,7 +276,6 @@ These fields are parsed by `kv-test` itself:
 | `metrics.listen_address` | Exporter bind address. Defaults to `127.0.0.1`. |
 | `metrics.port` | Exporter TCP port. Defaults to `9108`. |
 | `metrics.path` | Prometheus endpoint path. Defaults to `/metrics`. |
-| `metrics.health_path` | Exporter health endpoint. Defaults to `/health`, matching vLLM. |
 | `metrics.source` | Constant Prometheus `source` label. Defaults to `kv-test`. |
 | `metrics.model_name` | Compatibility label used by existing UCM dashboards. Defaults to `standalone`. |
 | `metrics.worker_id` | Stable worker label. Defaults to `asu-0`. |
@@ -600,7 +598,6 @@ kv-test bench store --duration 300
 Inspect it without Prometheus:
 
 ```bash
-curl -s http://127.0.0.1:9108/health
 curl -s http://127.0.0.1:9108/metrics | grep '^ucm:asu_'
 ```
 

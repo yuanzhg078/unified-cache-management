@@ -253,7 +253,6 @@ Status KvTestConfigLoader::Load(const std::string& configPath, KvTestConfig& con
                      config.metrics.definitionPath);
         GetStringAny(values, {"metrics.listen_address"}, config.metrics.listenAddress);
         GetStringAny(values, {"metrics.path"}, config.metrics.path);
-        GetStringAny(values, {"metrics.health_path"}, config.metrics.healthPath);
         GetStringAny(values, {"metrics.source"}, config.metrics.source);
         GetStringAny(values, {"metrics.model_name"}, config.metrics.modelName);
         GetStringAny(values, {"metrics.worker_id"}, config.metrics.workerId);
@@ -278,11 +277,6 @@ Status KvTestConfigLoader::Load(const std::string& configPath, KvTestConfig& con
             (config.metrics.path.empty() || config.metrics.path.front() != '/')) {
             throw std::invalid_argument("metrics.path must start with '/'");
         }
-        if (config.metrics.enabled &&
-            (config.metrics.healthPath.empty() || config.metrics.healthPath.front() != '/')) {
-            throw std::invalid_argument("metrics.health_path must start with '/'");
-        }
-
         std::uint64_t timeoutMs{0};
         if (GetUint64Any(values, {"connection.timeout_ms"}, timeoutMs)) {
             config.asuClientConfig.defaultWaitTimeoutMs = timeoutMs;

@@ -173,7 +173,6 @@ struct MetricsServerConfig {
     std::string listenAddress{"127.0.0.1"};
     std::uint16_t port{9108};
     std::string path{"/metrics"};
-    std::string healthPath{"/health"};
     std::string source{"kv-test"};
     std::string modelName{"standalone"};
     std::string workerId{"asu-0"};

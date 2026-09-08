@@ -234,7 +234,6 @@ metrics.config_path=./examples/metrics/metrics_configs.yaml
 metrics.listen_address=127.0.0.1
 metrics.port=9108
 metrics.path=/metrics
-metrics.health_path=/health
 metrics.source=kv-test
 metrics.model_name=standalone
 metrics.worker_id=asu-0
@@ -409,13 +408,12 @@ model_name="...", worker_id="..."
 
 ### 6.3 单一指标清单
 
-`metric_names.h` 是业务埋点的编译期唯一来源，`metrics_configs.yaml` 是 exporter 配置的唯一来源。新增指标时必须同时修改两者：
+standalone 的指标定义只来自两处：`metric_names.h` 提供编译期内置指标，
+`metrics_configs.yaml` 在启动期覆盖内置定义或新增字符串指标。两类指标的接入方式不同：
 
-1. 在 `ASU_BUILTIN_METRIC_LIST` 增加 ID、基础名、类型和说明；
-2. 在 `metrics_configs.yaml` 增加同名配置和 Histogram buckets；
-3. standalone 单测验证 YAML 类型校验和 exposition；
-4. UCM 测试验证 `UC::Metrics` 可 drain 到该指标；
-5. dashboard 查询只使用两种模式共有的名称、单位和标签。
+1. 高频、需要 `UpdateBuiltinBatch()` 的内置指标：在 `ASU_BUILTIN_METRIC_LIST` 增加 ID、基础名、类型和说明；如需统一 HELP 或 Histogram buckets，再在 YAML 增加同名定义。
+2. 仅在启动前确定的低频自定义指标：只在 `metrics_configs.yaml` 新增定义，业务侧通过 `Update(name, value)` 写入；它没有编译期 `MetricId`，不能传给 `UpdateBuiltinBatch()`。
+3. standalone 单测验证 YAML 类型校验和 exposition；UCM 测试验证 `UC::Metrics` 可 drain 到需要在 UCM 模式暴露的指标；dashboard 查询只使用两种模式共有的名称、单位和标签。
 
 ## 7. 模式对比与选择
 
@@ -442,7 +440,6 @@ model_name="...", worker_id="..."
 
 ```bash
 ./kv-test bench store --configpath ./ucm/transport/kv/kv-test/asu_kv_test.conf
-curl -s http://127.0.0.1:9108/health
 curl -s http://127.0.0.1:9108/metrics | grep '^ucm:asu_'
 ```
 

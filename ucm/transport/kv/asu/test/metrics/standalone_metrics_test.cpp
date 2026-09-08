@@ -286,23 +286,6 @@ TEST(ClientTaskMetricsTest, RecordsApiEntryToCompletionOnce)
     Shutdown();
 }
 
-TEST(StandaloneMetricsTest, RejectsBuiltinMetricTypeOverride)
-{
-    StandaloneMetricsConfig config;
-    config.port = FindUnusedLoopbackPort();
-    ASSERT_NE(config.port, 0);
-    config.descriptors.push_back({std::string{MetricName(MetricId::StoreRequests)},
-                                  MetricType::GAUGE,
-                                  "invalid override",
-                                  {}});
-
-    std::string error;
-    EXPECT_FALSE(Initialize(CreateStandaloneMetricsBackend(config), &error));
-    EXPECT_EQ(error, "built-in metric type cannot be overridden: " +
-                         std::string{MetricName(MetricId::StoreRequests)});
-    EXPECT_FALSE(IsEnabled());
-}
-
 TEST(StandaloneMetricsTest, RejectsASecondBackendUntilShutdown)
 {
     auto first = std::make_shared<RecordingMetricsBackend>();

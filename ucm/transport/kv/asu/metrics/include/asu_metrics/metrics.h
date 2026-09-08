@@ -34,13 +34,7 @@ class MetricsBackend {
 public:
     virtual ~MetricsBackend() = default;
 
-    // Lifecycle contract: callers must stop all ASU business threads before
-    // Shutdown(). Backend implementations do not support concurrent Stop()
-    // and Update/UpdateBuiltinBatch calls.
-
     virtual bool Start() = 0;
-    // The registered MetricDescriptor determines whether value is accumulated,
-    // replaces the current gauge, or is recorded as a histogram sample.
     virtual void Update(std::string_view name, double value) noexcept = 0;
     virtual void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates,
                                     std::size_t count) noexcept = 0;
@@ -55,8 +49,6 @@ void Flush();
 bool IsEnabled() noexcept;
 MetricTimer StartTimer() noexcept;
 
-// The registered MetricDescriptor determines whether value is accumulated,
-// replaces the current gauge, or is recorded as a histogram sample.
 void Update(std::string_view name, double value) noexcept;
 void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates, std::size_t count) noexcept;
 

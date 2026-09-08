@@ -124,7 +124,7 @@ ucm:asu_client_wait_duration_seconds
 | 指标 | 含义 | 注意 |
 |---|---|---|
 | `ucm:asu_metrics_exporter_up` | exporter 在最近一次暴露 metrics 时写出的内部状态 | 它最后一次抓到 1 后，短命 `kv-test` 退出也可能仍显示 1；不能作为实时进程存活判断。 |
-| `ucm:asu_metrics_exporter_http_requests_total` | exporter HTTP 请求累计次数 | 可确认 `/metrics` / `/health` 是否曾被访问；不是业务请求数。 |
+| `ucm:asu_metrics_exporter_http_requests_total` | exporter `/metrics` 请求累计次数 | 可确认 `/metrics` 是否曾被访问；不是业务请求数。 |
 | Prometheus 原生 `up{job="...",instance="..."}` | Prometheus 当前是否能 scrape 到目标 | 实时存活看这个：1 可抓取，0 表示目标仍配置但当前不可达。 |
 
 ## 6. Histogram、平均值、P50/P99 是什么
