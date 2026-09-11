@@ -40,13 +40,13 @@
 #include <thread>
 #include <utility>
 #include <vector>
-#include "asu_metrics/metrics.h"
+#include "kv_metrics/metrics.h"
 #include "logger.h"
 #include "proto/kv_protocol.h"
 
 namespace kv {
 
-namespace Metrics = UC::ASU::Metrics;
+namespace Metrics = kv::metrics;
 namespace {
 
 constexpr std::uint16_t kCqeSuccess = 0x000;

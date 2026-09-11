@@ -1,4 +1,4 @@
-﻿#include "kv_test_app.h"
+#include "kv_test_app.h"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -6,8 +6,8 @@
 #include <iostream>
 #include <sstream>
 #include <unordered_map>
-#include "asu_metrics/metrics.h"
-#include "asu_metrics/standalone_metrics_backend.h"
+#include "kv_metrics/metrics.h"
+#include "kv_metrics/standalone_metrics_backend.h"
 #include "kv_runtime_proxy.h"
 #include "kv_test_config_helpers.h"
 #include "payload_buffer_runtime.h"
@@ -30,7 +30,7 @@ public:
     Status Start(const MetricsServerConfig& config)
     {
         if (!config.enabled) { return Status::Success(); }
-        UC::ASU::Metrics::StandaloneMetricsConfig backendConfig;
+        kv::metrics::StandaloneMetricsConfig backendConfig;
         backendConfig.definitionPath = config.definitionPath;
         backendConfig.listenAddress = config.listenAddress;
         backendConfig.port = config.port;
@@ -42,10 +42,10 @@ public:
             {"worker_id",  config.workerId },
         };
         std::string error;
-        auto backend = UC::ASU::Metrics::CreateStandaloneMetricsBackend(std::move(backendConfig));
-        if (!UC::ASU::Metrics::Initialize(std::move(backend), &error)) {
+        auto backend = kv::metrics::CreateStandaloneMetricsBackend(std::move(backendConfig));
+        if (!kv::metrics::Initialize(std::move(backend), &error)) {
             return Status::Error(kExitInvalidArgument,
-                                 "failed to start ASU metrics exporter: " + error);
+                                 "failed to start KV metrics exporter: " + error);
         }
         started_ = true;
         shutdownGraceMs_ = config.shutdownGraceMs;
@@ -57,11 +57,11 @@ public:
     void Stop()
     {
         if (!started_) { return; }
-        UC::ASU::Metrics::Flush();
+        kv::metrics::Flush();
         if (shutdownGraceMs_ != 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(shutdownGraceMs_));
         }
-        UC::ASU::Metrics::Shutdown();
+        kv::metrics::Shutdown();
         started_ = false;
     }
 

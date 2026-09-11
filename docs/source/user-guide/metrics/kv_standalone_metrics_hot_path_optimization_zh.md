@@ -1,15 +1,15 @@
-# ASU Standalone Metrics 热路径优化
+# KV Standalone Metrics 热路径优化
 
 ## 1. 文档目的
 
-本文说明 ASU standalone metrics 在业务打点热路径上的四项性能优化，包括优化前后的差异、对应代码、并发正确性和生命周期约束。
+本文说明 KV standalone metrics 在业务打点热路径上的四项性能优化，包括优化前后的差异、对应代码、并发正确性和生命周期约束。
 
 这些优化的目标是降低 metrics 对 client/transport I/O 路径的固定 CPU 开销和尾延迟干扰。它们不改变指标名称、类型、单位、Histogram buckets 或 Prometheus/Grafana 查询语义。
 
 ## 2. 完整数据链路
 
 ```text
-ASU 业务代码
+KV 业务代码
   → Metrics::UpdateBuiltinBatch()
   → 原子读取 standalone backend
   → 获取当前业务线程的 ThreadBuffer
@@ -281,7 +281,7 @@ for (...) {
 
 - `kv_semantics/metrics/src/metrics.cc`：facade `UpdateBuiltinBatch()`；
 - `kv_semantics/metrics/src/standalone_metrics_backend.cc`：collector `UpdateBuiltinBatch()`、`builtinMetricIds_` 和 `ApplyUpdate()`；
-- `kv_semantics/metrics/include/asu_metrics/metric_names.h`：内置 `MetricId`、名称和类型定义。
+- `kv_semantics/metrics/include/kv_metrics/metric_names.h`：内置 `MetricId`、名称和类型定义。
 
 ## 7. Histogram 的写入和聚合
 
@@ -336,7 +336,7 @@ const auto bucket = static_cast<std::size_t>(
 | --- | --- |
 | facade 和 backend 快速指针 | `kv_semantics/metrics/src/metrics.cc` |
 | standalone TLS、双 buffer、聚合与 exporter | `kv_semantics/metrics/src/standalone_metrics_backend.cc` |
-| facade/backend 公共接口 | `kv_semantics/metrics/include/asu_metrics/metrics.h` |
-| 内置指标 ID、名称和类型 | `kv_semantics/metrics/include/asu_metrics/metric_names.h` |
+| facade/backend 公共接口 | `kv_semantics/metrics/include/kv_metrics/metrics.h` |
+| 内置指标 ID、名称和类型 | `kv_semantics/metrics/include/kv_metrics/metric_names.h` |
 | 并发 flush 正确性测试 | `kv_semantics/tests/metrics/standalone_metrics_test.cc` |
-| 总体架构与 standalone/UCM 兼容契约 | `docs/source/user-guide/metrics/asu_metrics_architecture_zh.md` |
+| 总体架构与 standalone/UCM 兼容契约 | `docs/source/user-guide/metrics/kv_metrics_architecture_zh.md` |

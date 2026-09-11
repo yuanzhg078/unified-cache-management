@@ -1,12 +1,12 @@
 #include "trans_task_manager.h"
 #include <chrono>
 #include <utility>
-#include "asu_metrics/metrics.h"
+#include "kv_metrics/metrics.h"
 #include "utils/trans_task_utils.h"
 
 namespace kv {
 
-namespace Metrics = UC::ASU::Metrics;
+namespace Metrics = kv::metrics;
 
 void FillEntryStatusFromCqeResult(const KvResponse& response,
                                   TransportSubBatchContext& subBatchContext)

@@ -28,7 +28,7 @@
 #include <limits>
 #include <thread>
 #include <utility>
-#include "asu_metrics/metrics.h"
+#include "kv_metrics/metrics.h"
 #include "device.h"
 #include "event.h"
 #include "kv_types.h"
@@ -39,7 +39,7 @@
 
 namespace kv {
 
-namespace Metrics = UC::ASU::Metrics;
+namespace Metrics = kv::metrics;
 
 namespace {
 

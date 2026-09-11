@@ -7,9 +7,9 @@
 #include <string>
 #include <string_view>
 #include <vector>
-#include "asu_metrics/metric_names.h"
+#include "kv_metrics/metric_names.h"
 
-namespace UC::ASU::Metrics {
+namespace kv::metrics {
 
 enum class MetricType { COUNTER = 0, GAUGE, HISTOGRAM };
 
@@ -52,6 +52,6 @@ MetricTimer StartTimer() noexcept;
 void Update(std::string_view name, double value) noexcept;
 void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates, std::size_t count) noexcept;
 
-std::vector<MetricDescriptor> DefaultAsuMetricDescriptors();
+std::vector<MetricDescriptor> DefaultKvMetricDescriptors();
 
-}  // namespace UC::ASU::Metrics
+}  // namespace kv::metrics

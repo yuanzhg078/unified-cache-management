@@ -26,14 +26,14 @@
 #include <chrono>
 #include <string>
 #include <utility>
-#include "asu_metrics/metrics.h"
+#include "kv_metrics/metrics.h"
 #include "kv_client_impl.h"
 #include "logger.h"
 #include "router/router.h"
 
 namespace kv {
 
-namespace Metrics = UC::ASU::Metrics;
+namespace Metrics = kv::metrics;
 
 namespace {
 

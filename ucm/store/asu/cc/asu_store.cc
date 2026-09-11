@@ -35,8 +35,8 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
-#include "asu_metrics/metrics.h"
-#include "asu_metrics/ucm_metrics_backend.h"
+#include "kv_metrics/metrics.h"
+#include "kv_metrics/ucm_metrics_backend.h"
 #include "kv_client.h"
 #include "logger/logger.h"
 #include "ucmstore_v1.h"
@@ -54,9 +54,9 @@ bool gOwnsMetricsBackend{false};
 bool AcquireMetricsBackend()
 {
     std::lock_guard<std::mutex> lock{gMetricsBackendMutex};
-    if (gMetricsBackendUsers == 0 && !UC::ASU::Metrics::IsEnabled()) {
+    if (gMetricsBackendUsers == 0 && !kv::metrics::IsEnabled()) {
         std::string error;
-        if (!UC::ASU::Metrics::Initialize(UC::ASU::Metrics::CreateUcmMetricsBackend(), &error)) {
+        if (!kv::metrics::Initialize(kv::metrics::CreateUcmMetricsBackend(), &error)) {
             UC_WARN("Failed to initialize ASU UCM metrics adapter: {}.", error);
             return false;
         }
@@ -72,7 +72,7 @@ void ReleaseMetricsBackend()
     if (gMetricsBackendUsers == 0) { return; }
     --gMetricsBackendUsers;
     if (gMetricsBackendUsers == 0 && gOwnsMetricsBackend) {
-        UC::ASU::Metrics::Shutdown();
+        kv::metrics::Shutdown();
         gOwnsMetricsBackend = false;
     }
 }
@@ -468,7 +468,7 @@ private:
         Config config;
         inConfig.Get("asu_mode", config.mode);
         inConfig.Get("asu_config_path", config.configPath);
-        inConfig.Get("asu_client_id", config.clientId);
+        inConfig.Get("kv_client_id", config.clientId);
         inConfig.Get("unique_id", config.uniqueId);
         inConfig.Get("asu_view_service_addrs", config.viewServiceAddrs);
         inConfig.GetNumbers("asu_ids", config.asuIds);
@@ -480,8 +480,8 @@ private:
         inConfig.GetNumber("asu_wait_timeout_ms", config.waitTimeoutMs);
         inConfig.GetNumber("asu_query_timeout_ms", config.queryTimeoutMs);
         inConfig.GetNumber("asu_max_error_count", config.maxErrorCount);
-        inConfig.GetNumber("asu_client_max_inflight_tasks", config.clientMaxInflightTasks);
-        inConfig.GetNumber("asu_transport_max_inflight_tasks", config.transportMaxInflightTasks);
+        inConfig.GetNumber("kv_client_max_inflight_tasks", config.clientMaxInflightTasks);
+        inConfig.GetNumber("kv_transport_max_inflight_tasks", config.transportMaxInflightTasks);
         inConfig.GetNumber("asu_completion_poll_spin_limit", config.completionPollSpinLimit);
         inConfig.GetNumber("asu_max_inflight_bytes", config.maxInflightBytes);
         inConfig.GetNumbers("gpu_kv_buffer_addrs", config.gpuKvBufferAddrs);
@@ -494,10 +494,10 @@ private:
         if (TryGetStringLike(inConfig, "asu_trans_provider_backend", providerBackend)) {
             config.transProviderType = ParseTransProviderBackend(providerBackend);
         }
-        inConfig.Get("asu_fake_backend_path", config.fakeBackendPath);
-        inConfig.GetNumber("asu_fake_backend_latency_ms", config.fakeBackendLatencyMs);
-        inConfig.GetNumber("asu_fake_backend_worker_threads", config.fakeBackendWorkerThreads);
-        inConfig.Get("asu_fake_backend_complete_immediately",
+        inConfig.Get("kv_fake_backend_path", config.fakeBackendPath);
+        inConfig.GetNumber("kv_fake_backend_latency_ms", config.fakeBackendLatencyMs);
+        inConfig.GetNumber("kv_fake_backend_worker_threads", config.fakeBackendWorkerThreads);
+        inConfig.Get("kv_fake_backend_complete_immediately",
                      config.fakeBackendCompleteImmediately);
         inConfig.GetNumber("asu_shared_provider", config.sharedProviderMode);
         inConfig.Get("asu_sc", config.sc);
@@ -631,13 +631,13 @@ private:
         if (config.transProviderType == kv::TransProviderType::FAKE &&
             config.fakeBackendWorkerThreads == 0) {
             return Status::InvalidParam(
-                "asu_fake_backend_worker_threads must be greater than zero");
+                "kv_fake_backend_worker_threads must be greater than zero");
         }
         if (config.clientMaxInflightTasks > std::numeric_limits<std::uint32_t>::max()) {
-            return Status::InvalidParam("asu_client_max_inflight_tasks exceeds uint32 range");
+            return Status::InvalidParam("kv_client_max_inflight_tasks exceeds uint32 range");
         }
         if (config.transportMaxInflightTasks > std::numeric_limits<std::uint32_t>::max()) {
-            return Status::InvalidParam("asu_transport_max_inflight_tasks exceeds uint32 range");
+            return Status::InvalidParam("kv_transport_max_inflight_tasks exceeds uint32 range");
         }
         if (config.completionPollSpinLimit == 0 ||
             config.completionPollSpinLimit > std::numeric_limits<std::size_t>::max()) {

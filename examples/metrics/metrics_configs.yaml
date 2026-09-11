@@ -18,34 +18,34 @@ consumers:
 
 # Counter metrics configuration
 counter:
-  # -- ASU/KV client and transport ------------------------------------------
-  - {name: "asu_client_query_requests_total", documentation: "Total ASU client query submissions"}
-  - {name: "asu_client_query_entries_total", documentation: "Total keys submitted to ASU client query"}
-  - {name: "asu_client_query_errors_total", documentation: "Total failed ASU client query submissions"}
-  - {name: "asu_client_load_requests_total", documentation: "Total ASU client load submissions"}
-  - {name: "asu_client_load_entries_total", documentation: "Total entries submitted to ASU client load"}
-  - {name: "asu_client_load_errors_total", documentation: "Total failed ASU client load submissions"}
-  - {name: "asu_client_store_requests_total", documentation: "Total ASU client store submissions"}
-  - {name: "asu_client_store_entries_total", documentation: "Total entries submitted to ASU client store"}
-  - {name: "asu_client_store_errors_total", documentation: "Total failed ASU client store submissions"}
-  - {name: "asu_client_batch_load_requests_total", documentation: "Total ASU client batch-load submissions"}
-  - {name: "asu_client_batch_load_entries_total", documentation: "Total entries submitted to ASU client batch-load"}
-  - {name: "asu_client_batch_load_errors_total", documentation: "Total failed ASU client batch-load submissions"}
-  - {name: "asu_client_batch_store_requests_total", documentation: "Total ASU client batch-store submissions"}
-  - {name: "asu_client_batch_store_entries_total", documentation: "Total entries submitted to ASU client batch-store"}
-  - {name: "asu_client_batch_store_errors_total", documentation: "Total failed ASU client batch-store submissions"}
-  - {name: "asu_client_delete_requests_total", documentation: "Total ASU client delete submissions"}
-  - {name: "asu_client_delete_entries_total", documentation: "Total keys submitted to ASU client delete"}
-  - {name: "asu_client_delete_errors_total", documentation: "Total failed ASU client delete submissions"}
-  - {name: "asu_client_wait_requests_total", documentation: "Total ASU client wait calls"}
-  - {name: "asu_client_wait_errors_total", documentation: "Total failed ASU client wait calls"}
-  - {name: "asu_client_task_queue_wait_notified_total", documentation: "ASU client queue waits completed by notification"}
-  - {name: "asu_client_task_queue_wait_timeout_total", documentation: "ASU client queue waits completed by timeout"}
-  - {name: "asu_client_task_queue_notify_total", documentation: "ASU client queue notifications"}
-  - {name: "asu_transport_task_queue_wait_notified_total", documentation: "ASU transport queue waits completed by notification"}
-  - {name: "asu_transport_task_queue_wait_timeout_total", documentation: "ASU transport queue waits completed by timeout"}
-  - {name: "asu_transport_task_queue_notify_total", documentation: "ASU transport queue notifications"}
-  - {name: "asu_metrics_exporter_http_requests_total", documentation: "HTTP requests served by the ASU metrics endpoint"}
+  # -- KV/KV client and transport ------------------------------------------
+  - {name: "kv_client_query_requests_total", documentation: "Total KV client query submissions"}
+  - {name: "kv_client_query_entries_total", documentation: "Total keys submitted to KV client query"}
+  - {name: "kv_client_query_errors_total", documentation: "Total failed KV client query submissions"}
+  - {name: "kv_client_load_requests_total", documentation: "Total KV client load submissions"}
+  - {name: "kv_client_load_entries_total", documentation: "Total entries submitted to KV client load"}
+  - {name: "kv_client_load_errors_total", documentation: "Total failed KV client load submissions"}
+  - {name: "kv_client_store_requests_total", documentation: "Total KV client store submissions"}
+  - {name: "kv_client_store_entries_total", documentation: "Total entries submitted to KV client store"}
+  - {name: "kv_client_store_errors_total", documentation: "Total failed KV client store submissions"}
+  - {name: "kv_client_batch_load_requests_total", documentation: "Total KV client batch-load submissions"}
+  - {name: "kv_client_batch_load_entries_total", documentation: "Total entries submitted to KV client batch-load"}
+  - {name: "kv_client_batch_load_errors_total", documentation: "Total failed KV client batch-load submissions"}
+  - {name: "kv_client_batch_store_requests_total", documentation: "Total KV client batch-store submissions"}
+  - {name: "kv_client_batch_store_entries_total", documentation: "Total entries submitted to KV client batch-store"}
+  - {name: "kv_client_batch_store_errors_total", documentation: "Total failed KV client batch-store submissions"}
+  - {name: "kv_client_delete_requests_total", documentation: "Total KV client delete submissions"}
+  - {name: "kv_client_delete_entries_total", documentation: "Total keys submitted to KV client delete"}
+  - {name: "kv_client_delete_errors_total", documentation: "Total failed KV client delete submissions"}
+  - {name: "kv_client_wait_requests_total", documentation: "Total KV client wait calls"}
+  - {name: "kv_client_wait_errors_total", documentation: "Total failed KV client wait calls"}
+  - {name: "kv_client_task_queue_wait_notified_total", documentation: "KV client queue waits completed by notification"}
+  - {name: "kv_client_task_queue_wait_timeout_total", documentation: "KV client queue waits completed by timeout"}
+  - {name: "kv_client_task_queue_notify_total", documentation: "KV client queue notifications"}
+  - {name: "kv_transport_task_queue_wait_notified_total", documentation: "KV transport queue waits completed by notification"}
+  - {name: "kv_transport_task_queue_wait_timeout_total", documentation: "KV transport queue waits completed by timeout"}
+  - {name: "kv_transport_task_queue_notify_total", documentation: "KV transport queue notifications"}
+  - {name: "kv_metrics_exporter_http_requests_total", documentation: "HTTP requests served by the KV metrics endpoint"}
   # -- Pipeline Cache stage: lookup hit/miss breakdown ----------------------
   # Hit counters let Prometheus compute hit rate without losing precision:
   #   rate(ucm:cache_lookup_hit_blocks_total[5m])
@@ -227,8 +227,8 @@ counter:
 
 # Gauge metrics configuration
 gauge:
-  - name: "asu_metrics_exporter_up"
-    documentation: "Whether the ASU standalone metrics exporter is running"
+  - name: "kv_metrics_exporter_up"
+    documentation: "Whether the KV standalone metrics exporter is running"
     multiprocess_mode: "livemostrecent"
   - name: "yuanrong_dram_used_bytes"
     documentation: "YuanRong physical shared-memory usage in bytes"
@@ -275,27 +275,27 @@ gauge:
 
 # Histogram metrics configuration
 histogram:
-  # ASU duration values are recorded in seconds.
-  - {name: "asu_client_query_submit_duration_seconds", documentation: "ASU client query submission duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_client_load_submit_duration_seconds", documentation: "ASU client load submission duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_client_store_submit_duration_seconds", documentation: "ASU client store submission duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_client_batch_load_submit_duration_seconds", documentation: "ASU client batch-load submission duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_client_batch_store_submit_duration_seconds", documentation: "ASU client batch-store submission duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_client_delete_submit_duration_seconds", documentation: "ASU client delete submission duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_client_wait_duration_seconds", documentation: "ASU client wait duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_client_task_enqueue_duration_seconds", documentation: "ASU client API-to-enqueue duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_client_task_queue_duration_seconds", documentation: "ASU client task queue duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_client_task_process_duration_seconds", documentation: "ASU client task processing duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_client_task_pre_send_duration_seconds", documentation: "ASU client duration until all transport tasks reach Send", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_client_task_send_duration_seconds", documentation: "ASU client duration until all Send calls return", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_client_task_duration_seconds", documentation: "ASU client task end-to-end duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_transport_task_pre_send_duration_seconds", documentation: "ASU transport duration before Send", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_transport_task_queue_duration_seconds", documentation: "ASU transport task queue duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_transport_task_process_duration_seconds", documentation: "ASU transport task processing duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_transport_task_send_duration_seconds", documentation: "ASU transport duration until Send returns", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_transport_task_completion_duration_seconds", documentation: "ASU transport completion callback duration after Send", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_fake_backend_task_queue_duration_seconds", documentation: "ASU fake backend task queue duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
-  - {name: "asu_fake_backend_task_process_duration_seconds", documentation: "ASU fake backend processing duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  # KV duration values are recorded in seconds.
+  - {name: "kv_client_query_submit_duration_seconds", documentation: "KV client query submission duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_client_load_submit_duration_seconds", documentation: "KV client load submission duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_client_store_submit_duration_seconds", documentation: "KV client store submission duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_client_batch_load_submit_duration_seconds", documentation: "KV client batch-load submission duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_client_batch_store_submit_duration_seconds", documentation: "KV client batch-store submission duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_client_delete_submit_duration_seconds", documentation: "KV client delete submission duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_client_wait_duration_seconds", documentation: "KV client wait duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_client_task_enqueue_duration_seconds", documentation: "KV client API-to-enqueue duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_client_task_queue_duration_seconds", documentation: "KV client task queue duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_client_task_process_duration_seconds", documentation: "KV client task processing duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_client_task_pre_send_duration_seconds", documentation: "KV client duration until all transport tasks reach Send", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_client_task_send_duration_seconds", documentation: "KV client duration until all Send calls return", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_client_task_duration_seconds", documentation: "KV client task end-to-end duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_transport_task_pre_send_duration_seconds", documentation: "KV transport duration before Send", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_transport_task_queue_duration_seconds", documentation: "KV transport task queue duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_transport_task_process_duration_seconds", documentation: "KV transport task processing duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_transport_task_send_duration_seconds", documentation: "KV transport duration until Send returns", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_transport_task_completion_duration_seconds", documentation: "KV transport completion callback duration after Send", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_fake_backend_task_queue_duration_seconds", documentation: "KV fake backend task queue duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
+  - {name: "kv_fake_backend_task_process_duration_seconds", documentation: "KV fake backend processing duration", buckets: [0.00001, 0.00005, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]}
   # -- End-to-end connector metrics -----------------------------------------
   - name: "save_duration"
     documentation: "Time from UCM connector wait_for_save entry to async dump task completion (ms)"

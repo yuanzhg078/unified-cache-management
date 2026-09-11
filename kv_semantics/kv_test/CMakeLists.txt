@@ -41,7 +41,7 @@ target_link_libraries(kv-test
         ${CMAKE_DL_LIBS}
         kv_client
         kv_buffer_runtime
-        asu_metrics_standalone
+        kv_metrics_standalone
 )
 
 if(BUILD_UNIT_TESTS)

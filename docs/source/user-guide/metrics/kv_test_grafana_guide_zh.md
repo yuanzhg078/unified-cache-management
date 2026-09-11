@@ -1,8 +1,8 @@
-# ASU kv-test Metrics 与 Grafana 使用手册
+# KV kv-test Metrics 与 Grafana 使用手册
 
 本文说明 `kv-test` 使用 standalone metrics 时，Grafana 每条曲线实际测量的代码路径。重点是明确：**图例名、Prometheus 指标、起点、终点，以及数值升高代表什么。**
 
-指标带有 `ucm:` 前缀；Prometheus 的实际 exposition 名会转换为下划线形式，例如 `ucm:asu_client_task_duration_seconds` 会显示为 `ucm_asu_client_task_duration_seconds`。
+指标带有 `ucm:` 前缀；Prometheus 的实际 exposition 名会转换为下划线形式，例如 `ucm:kv_client_task_duration_seconds` 会显示为 `ucm_kv_client_task_duration_seconds`。
 
 ## 1. 先看完整路径
 
@@ -29,13 +29,13 @@ t0  kv-test 调用 client 的 *Async()
 
 | Grafana 图例 | 指标 | 起点 → 终点 | 数值高通常说明 |
 |---|---|---|---|
-| `client: API to enqueue` | `ucm:asu_client_task_enqueue_duration_seconds` | 进入 `*Async()` → `ClientTask` 放入 client `taskQueue_` | API 入口同步工作慢：参数/快照检查、创建任务、复制 entry/key 描述符、MR 映射、`taskManager_.Submit()` 或 queue mutex 竞争。不是 timeout 等待。 |
-| `client: queue wait` | `ucm:asu_client_task_queue_duration_seconds` | 放入 client `taskQueue_` → client worker 取出 | client worker 忙，client task 在队列堆积。 |
-| `client: worker process to transport-submit` | `ucm:asu_client_task_process_duration_seconds` | client worker 取出 → 此 ClientTask 最后一次 `transport->Submit()` 返回 | client 的路由、按 ASU 拆分、创建 child、填回调、循环调用 `transport->Submit()` 慢。**终点是 Submit 返回，不等 provider Send。** |
-| `transport: queue wait` | `ucm:asu_transport_task_queue_duration_seconds` | client 即将调用 `transport->Submit()` → transport executor 开始执行该 TransportTask | transport executor 忙，TransportTask 在其队列积压。每个 TransportTask 各记一次。 |
-| `transport: executor process to pre-Send` | `ucm:asu_transport_task_process_duration_seconds` | transport executor 开始执行 → 即将调用 provider `Send()` | sub-batch/buffer 构造、连接或请求属性准备等 transport 内部处理慢。 |
-| `total: transport task to pre-Send` | `ucm:asu_transport_task_pre_send_duration_seconds` | client 分发该 TransportTask（Submit 前）→ 即将调用 provider `Send()` | 即 transport queue wait + transport executor process；每个 TransportTask 一条样本。 |
-| `total: client task to all pre-Send` | `ucm:asu_client_task_pre_send_duration_seconds` | 进入 `*Async()` → 该 ClientTask 的**所有** TransportTask 都到达 provider `Send()` 前 | 整个提交前路径慢；多 child 时由最慢 child 决定。 |
+| `client: API to enqueue` | `ucm:kv_client_task_enqueue_duration_seconds` | 进入 `*Async()` → `ClientTask` 放入 client `taskQueue_` | API 入口同步工作慢：参数/快照检查、创建任务、复制 entry/key 描述符、MR 映射、`taskManager_.Submit()` 或 queue mutex 竞争。不是 timeout 等待。 |
+| `client: queue wait` | `ucm:kv_client_task_queue_duration_seconds` | 放入 client `taskQueue_` → client worker 取出 | client worker 忙，client task 在队列堆积。 |
+| `client: worker process to transport-submit` | `ucm:kv_client_task_process_duration_seconds` | client worker 取出 → 此 ClientTask 最后一次 `transport->Submit()` 返回 | client 的路由、按 KV 拆分、创建 child、填回调、循环调用 `transport->Submit()` 慢。**终点是 Submit 返回，不等 provider Send。** |
+| `transport: queue wait` | `ucm:kv_transport_task_queue_duration_seconds` | client 即将调用 `transport->Submit()` → transport executor 开始执行该 TransportTask | transport executor 忙，TransportTask 在其队列积压。每个 TransportTask 各记一次。 |
+| `transport: executor process to pre-Send` | `ucm:kv_transport_task_process_duration_seconds` | transport executor 开始执行 → 即将调用 provider `Send()` | sub-batch/buffer 构造、连接或请求属性准备等 transport 内部处理慢。 |
+| `total: transport task to pre-Send` | `ucm:kv_transport_task_pre_send_duration_seconds` | client 分发该 TransportTask（Submit 前）→ 即将调用 provider `Send()` | 即 transport queue wait + transport executor process；每个 TransportTask 一条样本。 |
+| `total: client task to all pre-Send` | `ucm:kv_client_task_pre_send_duration_seconds` | 进入 `*Async()` → 该 ClientTask 的**所有** TransportTask 都到达 provider `Send()` 前 | 整个提交前路径慢；多 child 时由最慢 child 决定。 |
 
 ### 一个 ClientTask 只拆成一个 TransportTask 时
 
@@ -60,10 +60,10 @@ transport task to pre-Send
 
 | Grafana 图例/含义 | 指标 | 起点 → 终点 | 应怎样看 |
 |---|---|---|---|
-| `client task to all Send return` | `ucm:asu_client_task_send_duration_seconds` | `*Async()` API 入口 → 所有 child 的 provider `Send()` 都返回 | 包含前文全部 pre-Send 路径，及每个 child 的 Send 调用本身；多 child 时由最后返回的 child 决定。 |
-| `transport task to Send return` | `ucm:asu_transport_task_send_duration_seconds` | client 分发该 TransportTask（Submit 前）→ 该 task 的 provider `Send()` 返回 | 包含 transport 队列、executor 处理与 Send 调用。它不是“纯 Send 函数耗时”。 |
-| `transport task: Send return to completion` | `ucm:asu_transport_task_completion_duration_seconds` | 对该 TransportTask 的 `Send()` 返回 → completion worker 收到/处理 CQE 并触发 transport 完成回调 | Send 已返回后仍慢，重点检查 CQE、provider/后端返回与 completion 路径。一个 TransportTask 的全部 sub-batch 完成后才算完成。 |
-| `client task end-to-end` | `ucm:asu_client_task_duration_seconds` | `*Async()` API 入口 → 所有 TransportTask 完成回调被 client 聚合 | 一个 ClientTask 的完整本地端到端时延；包含 Send 前、Send、completion 与最终聚合。 |
+| `client task to all Send return` | `ucm:kv_client_task_send_duration_seconds` | `*Async()` API 入口 → 所有 child 的 provider `Send()` 都返回 | 包含前文全部 pre-Send 路径，及每个 child 的 Send 调用本身；多 child 时由最后返回的 child 决定。 |
+| `transport task to Send return` | `ucm:kv_transport_task_send_duration_seconds` | client 分发该 TransportTask（Submit 前）→ 该 task 的 provider `Send()` 返回 | 包含 transport 队列、executor 处理与 Send 调用。它不是“纯 Send 函数耗时”。 |
+| `transport task: Send return to completion` | `ucm:kv_transport_task_completion_duration_seconds` | 对该 TransportTask 的 `Send()` 返回 → completion worker 收到/处理 CQE 并触发 transport 完成回调 | Send 已返回后仍慢，重点检查 CQE、provider/后端返回与 completion 路径。一个 TransportTask 的全部 sub-batch 完成后才算完成。 |
+| `client task end-to-end` | `ucm:kv_client_task_duration_seconds` | `*Async()` API 入口 → 所有 TransportTask 完成回调被 client 聚合 | 一个 ClientTask 的完整本地端到端时延；包含 Send 前、Send、completion 与最终聚合。 |
 
 常用诊断：
 
@@ -81,7 +81,7 @@ client end-to-end 高，而 completion 不高
   → 对照 client task to all Send return，检查 client 侧的聚合或多 child 最慢分支
 ```
 
-这些都是 client/transport 进程视角的时延，不能替代 ASU 后端服务自己的队列、执行和存储时延；后端要单独暴露 metrics。
+这些都是 client/transport 进程视角的时延，不能替代 KV 后端服务自己的队列、执行和存储时延；后端要单独暴露 metrics。
 
 ## 4. 接口级 submit / Wait 时延
 
@@ -89,13 +89,13 @@ client end-to-end 高，而 completion 不高
 
 | 图例类别 | 指标 | 起点 → 终点 |
 |---|---|---|
-| Query submit | `ucm:asu_client_query_submit_duration_seconds` | `QueryAsync()` 进入 → `SubmitAsync` 返回 |
-| Load submit | `ucm:asu_client_load_submit_duration_seconds` | `LoadAsync()` 进入 → `SubmitAsync` 返回 |
-| Store submit | `ucm:asu_client_store_submit_duration_seconds` | `StoreAsync()` 进入 → `SubmitAsync` 返回 |
-| BatchLoad submit | `ucm:asu_client_batch_load_submit_duration_seconds` | `BatchLoadAsync()` 进入 → `SubmitAsync` 返回 |
-| BatchStore submit | `ucm:asu_client_batch_store_submit_duration_seconds` | `BatchStoreAsync()` 进入 → `SubmitAsync` 返回 |
-| Delete submit | `ucm:asu_client_delete_submit_duration_seconds` | `DeleteAsync()` 进入 → `SubmitAsync` 返回 |
-| Wait | `ucm:asu_client_wait_duration_seconds` | 进入 `Wait()` → Wait 返回 |
+| Query submit | `ucm:kv_client_query_submit_duration_seconds` | `QueryAsync()` 进入 → `SubmitAsync` 返回 |
+| Load submit | `ucm:kv_client_load_submit_duration_seconds` | `LoadAsync()` 进入 → `SubmitAsync` 返回 |
+| Store submit | `ucm:kv_client_store_submit_duration_seconds` | `StoreAsync()` 进入 → `SubmitAsync` 返回 |
+| BatchLoad submit | `ucm:kv_client_batch_load_submit_duration_seconds` | `BatchLoadAsync()` 进入 → `SubmitAsync` 返回 |
+| BatchStore submit | `ucm:kv_client_batch_store_submit_duration_seconds` | `BatchStoreAsync()` 进入 → `SubmitAsync` 返回 |
+| Delete submit | `ucm:kv_client_delete_submit_duration_seconds` | `DeleteAsync()` 进入 → `SubmitAsync` 返回 |
+| Wait | `ucm:kv_client_wait_duration_seconds` | 进入 `Wait()` → Wait 返回 |
 
 `*_submit_duration_seconds` 不等后端实际完成，通常只是异步 API 交付 task id/提交工作的耗时。`Wait` 才是调用方等待 task completion 的时长，但它也只覆盖该次 `Wait()` 调用：若 task 在 Wait 前就已完成，Wait 可以很短。
 
@@ -105,16 +105,16 @@ client end-to-end 高，而 completion 不高
 
 | 类别 | 形式 | 意义 | 常用 Grafana / PromQL 解读 |
 |---|---|---|---|
-| 请求数 | `ucm:asu_client_<operation>_requests_total` | 对该异步接口的调用次数 | `rate(...[$__rate_interval])` 是请求/s。 |
-| entry/key 数 | `ucm:asu_client_<operation>_entries_total` | 该操作涉及的 entry 或 key 总数 | `entries rate / requests rate` 是平均 batch 大小；单条 Store/Load 通常接近 1。 |
-| 错误数 | `ucm:asu_client_<operation>_errors_total` | 该操作失败返回的累计次数 | `rate(errors) / rate(requests)` 是错误率。持续非零或突增应结合 kv-test 日志排查。 |
+| 请求数 | `ucm:kv_client_<operation>_requests_total` | 对该异步接口的调用次数 | `rate(...[$__rate_interval])` 是请求/s。 |
+| entry/key 数 | `ucm:kv_client_<operation>_entries_total` | 该操作涉及的 entry 或 key 总数 | `entries rate / requests rate` 是平均 batch 大小；单条 Store/Load 通常接近 1。 |
+| 错误数 | `ucm:kv_client_<operation>_errors_total` | 该操作失败返回的累计次数 | `rate(errors) / rate(requests)` 是错误率。持续非零或突增应结合 kv-test 日志排查。 |
 
 `Wait` 没有 entries 指标，只有：
 
 ```text
-ucm:asu_client_wait_requests_total
-ucm:asu_client_wait_errors_total
-ucm:asu_client_wait_duration_seconds
+ucm:kv_client_wait_requests_total
+ucm:kv_client_wait_errors_total
+ucm:kv_client_wait_duration_seconds
 ```
 
 例如 `client_task_complete` 或 task completion 语义的计数，应该按 **task 数**理解，不是 BatchStore 内 entry 的数量；要看 entry 数应使用对应 operation 的 `*_entries_total`。
@@ -123,8 +123,8 @@ ucm:asu_client_wait_duration_seconds
 
 | 指标 | 含义 | 注意 |
 |---|---|---|
-| `ucm:asu_metrics_exporter_up` | exporter 在最近一次暴露 metrics 时写出的内部状态 | 它最后一次抓到 1 后，短命 `kv-test` 退出也可能仍显示 1；不能作为实时进程存活判断。 |
-| `ucm:asu_metrics_exporter_http_requests_total` | exporter `/metrics` 请求累计次数 | 可确认 `/metrics` 是否曾被访问；不是业务请求数。 |
+| `ucm:kv_metrics_exporter_up` | exporter 在最近一次暴露 metrics 时写出的内部状态 | 它最后一次抓到 1 后，短命 `kv-test` 退出也可能仍显示 1；不能作为实时进程存活判断。 |
+| `ucm:kv_metrics_exporter_http_requests_total` | exporter `/metrics` 请求累计次数 | 可确认 `/metrics` 是否曾被访问；不是业务请求数。 |
 | Prometheus 原生 `up{job="...",instance="..."}` | Prometheus 当前是否能 scrape 到目标 | 实时存活看这个：1 可抓取，0 表示目标仍配置但当前不可达。 |
 
 ## 6. Histogram、平均值、P50/P99 是什么
@@ -148,9 +148,9 @@ Dashboard 的两种时延图不是同一种统计：
 平均值的标准表达式为：
 
 ```promql
-sum(rate(ucm_asu_client_task_duration_seconds_sum[$__rate_interval]))
+sum(rate(ucm_kv_client_task_duration_seconds_sum[$__rate_interval]))
 /
-sum(rate(ucm_asu_client_task_duration_seconds_count[$__rate_interval]))
+sum(rate(ucm_kv_client_task_duration_seconds_count[$__rate_interval]))
 ```
 
 分位数例如 P99：
@@ -158,7 +158,7 @@ sum(rate(ucm_asu_client_task_duration_seconds_count[$__rate_interval]))
 ```promql
 histogram_quantile(0.99,
   sum by (le) (
-    rate(ucm_asu_client_task_duration_seconds_bucket[$__rate_interval])
+    rate(ucm_kv_client_task_duration_seconds_bucket[$__rate_interval])
   )
 )
 ```
@@ -211,7 +211,7 @@ metrics.shutdown_grace_ms=30000        # 短命 bench 结束后留给 Prometheus
 ```text
 source      # 例如 kv-test
 model_name  # 例如 standalone
-worker_id   # 例如 asu-0
+worker_id   # 例如 kv-0
 ```
 
 Grafana 顶部的 Source、Model、Worker 变量就是这些标签。多实例同时写入时先筛选标签，避免把不同进程的 Counter、Histogram 混合。`bench.concurrency`、`bench.batch_size` 等参数当前不是 metrics label；同一标签下的不同测试轮次不能由 Dashboard 自动区分。

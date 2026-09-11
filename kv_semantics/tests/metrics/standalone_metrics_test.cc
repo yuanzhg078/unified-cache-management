@@ -11,12 +11,12 @@
 #include <thread>
 #include <unistd.h>
 #include <vector>
-#include "asu_metrics/metric_names.h"
-#include "asu_metrics/metrics.h"
-#include "asu_metrics/standalone_metrics_backend.h"
+#include "kv_metrics/metric_names.h"
+#include "kv_metrics/metrics.h"
+#include "kv_metrics/standalone_metrics_backend.h"
 #include "task/task_manager.h"
 
-namespace UC::ASU::Metrics {
+namespace kv::metrics {
 namespace {
 
 std::uint16_t FindUnusedLoopbackPort()
@@ -102,12 +102,12 @@ TEST(StandaloneMetricsTest, ExposesCounterGaugeAndHistogramInPrometheusFormat)
 
     const auto response = HttpGet(config.port, config.metricsPath);
     EXPECT_NE(response.find("HTTP/1.1 200 OK"), std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_client_store_requests_total{source=\"test\"} 2"),
+    EXPECT_NE(response.find("ucm:kv_client_store_requests_total{source=\"test\"} 2"),
               std::string::npos);
     EXPECT_NE(
-        response.find("ucm:asu_client_store_submit_duration_seconds_count{source=\"test\"} 1"),
+        response.find("ucm:kv_client_store_submit_duration_seconds_count{source=\"test\"} 1"),
         std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_metrics_exporter_up{source=\"test\"} 2"), std::string::npos);
+    EXPECT_NE(response.find("ucm:kv_metrics_exporter_up{source=\"test\"} 2"), std::string::npos);
 
     Shutdown();
 }
@@ -137,8 +137,8 @@ TEST(StandaloneMetricsTest, AggregatesMetricsWrittenByMultipleThreads)
     Flush();
 
     const auto response = HttpGet(config.port, config.metricsPath);
-    EXPECT_NE(response.find("ucm:asu_client_store_requests_total 4000"), std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_client_store_submit_duration_seconds_count 4000"),
+    EXPECT_NE(response.find("ucm:kv_client_store_requests_total 4000"), std::string::npos);
+    EXPECT_NE(response.find("ucm:kv_client_store_submit_duration_seconds_count 4000"),
               std::string::npos);
 
     Shutdown();
@@ -182,9 +182,9 @@ TEST(StandaloneMetricsTest, DoesNotLoseUpdatesDuringConcurrentFlush)
 
     const auto response = HttpGet(config.port, config.metricsPath);
     EXPECT_NE(
-        response.find("ucm:asu_client_store_requests_total " + std::to_string(kExpectedUpdates)),
+        response.find("ucm:kv_client_store_requests_total " + std::to_string(kExpectedUpdates)),
         std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_client_store_submit_duration_seconds_count " +
+    EXPECT_NE(response.find("ucm:kv_client_store_submit_duration_seconds_count " +
                             std::to_string(kExpectedUpdates)),
               std::string::npos);
 
@@ -223,32 +223,32 @@ TEST(StandaloneMetricsTest, UpdatesBuiltInMetricsInOneBatch)
     Flush();
 
     const auto response = HttpGet(config.port, config.metricsPath);
-    EXPECT_NE(response.find("ucm:asu_client_store_requests_total 1"), std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_client_store_entries_total 8"), std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_client_store_submit_duration_seconds_count 1"),
+    EXPECT_NE(response.find("ucm:kv_client_store_requests_total 1"), std::string::npos);
+    EXPECT_NE(response.find("ucm:kv_client_store_entries_total 8"), std::string::npos);
+    EXPECT_NE(response.find("ucm:kv_client_store_submit_duration_seconds_count 1"),
               std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_client_task_pre_send_duration_seconds_count 1"),
+    EXPECT_NE(response.find("ucm:kv_client_task_pre_send_duration_seconds_count 1"),
               std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_client_task_send_duration_seconds_count 1"),
+    EXPECT_NE(response.find("ucm:kv_client_task_send_duration_seconds_count 1"),
               std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_client_task_duration_seconds_count 1"), std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_client_task_queue_wait_notified_total 2"), std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_client_task_queue_wait_timeout_total 6"), std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_client_task_queue_notify_total 3"), std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_transport_task_pre_send_duration_seconds_count 1"),
+    EXPECT_NE(response.find("ucm:kv_client_task_duration_seconds_count 1"), std::string::npos);
+    EXPECT_NE(response.find("ucm:kv_client_task_queue_wait_notified_total 2"), std::string::npos);
+    EXPECT_NE(response.find("ucm:kv_client_task_queue_wait_timeout_total 6"), std::string::npos);
+    EXPECT_NE(response.find("ucm:kv_client_task_queue_notify_total 3"), std::string::npos);
+    EXPECT_NE(response.find("ucm:kv_transport_task_pre_send_duration_seconds_count 1"),
               std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_transport_task_send_duration_seconds_count 1"),
+    EXPECT_NE(response.find("ucm:kv_transport_task_send_duration_seconds_count 1"),
               std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_transport_task_completion_duration_seconds_count 1"),
+    EXPECT_NE(response.find("ucm:kv_transport_task_completion_duration_seconds_count 1"),
               std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_transport_task_queue_wait_notified_total 4"),
+    EXPECT_NE(response.find("ucm:kv_transport_task_queue_wait_notified_total 4"),
               std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_transport_task_queue_wait_timeout_total 7"),
+    EXPECT_NE(response.find("ucm:kv_transport_task_queue_wait_timeout_total 7"),
               std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_transport_task_queue_notify_total 5"), std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_fake_backend_task_queue_duration_seconds_count 1"),
+    EXPECT_NE(response.find("ucm:kv_transport_task_queue_notify_total 5"), std::string::npos);
+    EXPECT_NE(response.find("ucm:kv_fake_backend_task_queue_duration_seconds_count 1"),
               std::string::npos);
-    EXPECT_NE(response.find("ucm:asu_fake_backend_task_process_duration_seconds_count 1"),
+    EXPECT_NE(response.find("ucm:kv_fake_backend_task_process_duration_seconds_count 1"),
               std::string::npos);
 
     Shutdown();
@@ -298,4 +298,4 @@ TEST(StandaloneMetricsTest, RejectsASecondBackendUntilShutdown)
 }
 
 }  // namespace
-}  // namespace UC::ASU::Metrics
+}  // namespace kv::metrics

@@ -62,7 +62,7 @@ user-guide/prefix-cache/index
 user-guide/sparse-attention/index
 user-guide/pd-disaggregation/index
 user-guide/metrics/metrics
-user-guide/metrics/asu_metrics_architecture_zh
+user-guide/metrics/kv_metrics_architecture_zh
 user-guide/metrics/asu_kv_test_grafana_guide_zh
 user-guide/metrics/asu_standalone_metrics_hot_path_optimization_zh
 user-guide/rerope/rerope

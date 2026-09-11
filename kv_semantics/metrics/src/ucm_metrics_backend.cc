@@ -1,4 +1,4 @@
-#include "asu_metrics/ucm_metrics_backend.h"
+#include "kv_metrics/ucm_metrics_backend.h"
 #include <array>
 #include <cmath>
 #include <exception>
@@ -8,7 +8,7 @@
 #include <utility>
 #include "metrics_api.h"
 
-namespace UC::ASU::Metrics {
+namespace kv::metrics {
 namespace {
 
 const char* MetricTypeName(MetricType type)
@@ -110,4 +110,4 @@ std::shared_ptr<MetricsBackend> CreateUcmMetricsBackend(std::vector<MetricDescri
     return std::make_shared<UcmMetricsBackend>(std::move(descriptors), histogramMaxLength);
 }
 
-}  // namespace UC::ASU::Metrics
+}  // namespace kv::metrics

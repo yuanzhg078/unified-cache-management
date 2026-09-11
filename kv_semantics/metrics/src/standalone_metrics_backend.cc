@@ -1,4 +1,4 @@
-#include "asu_metrics/standalone_metrics_backend.h"
+#include "kv_metrics/standalone_metrics_backend.h"
 #include <algorithm>
 #include <arpa/inet.h>
 #include <array>
@@ -28,7 +28,7 @@
 #include <utility>
 #include <vector>
 
-namespace UC::ASU::Metrics {
+namespace kv::metrics {
 namespace {
 
 constexpr int kListenBacklog = 16;
@@ -150,10 +150,10 @@ const char* PrometheusTypeName(MetricType type)
 MetricType BuiltinMetricType(MetricId id)
 {
     switch (id) {
-#define ASU_BUILTIN_METRIC_TYPE_CASE(metricId, name, type, documentation) \
+#define KV_BUILTIN_METRIC_TYPE_CASE(metricId, name, type, documentation) \
     case MetricId::metricId: return MetricType::type;
-        ASU_BUILTIN_METRIC_LIST(ASU_BUILTIN_METRIC_TYPE_CASE)
-#undef ASU_BUILTIN_METRIC_TYPE_CASE
+        KV_BUILTIN_METRIC_LIST(KV_BUILTIN_METRIC_TYPE_CASE)
+#undef KV_BUILTIN_METRIC_TYPE_CASE
         case MetricId::COUNT: break;
     }
     return MetricType::COUNTER;
@@ -774,7 +774,7 @@ public:
     bool Start() override
     {
         std::map<std::string, MetricDescriptor> descriptors;
-        for (auto& descriptor : DefaultAsuMetricDescriptors()) {
+        for (auto& descriptor : DefaultKvMetricDescriptors()) {
             descriptors[descriptor.name] = std::move(descriptor);
         }
 
@@ -856,4 +856,4 @@ std::shared_ptr<MetricsBackend> CreateStandaloneMetricsBackend(StandaloneMetrics
     return std::make_shared<StandaloneMetricsBackend>(std::move(config));
 }
 
-}  // namespace UC::ASU::Metrics
+}  // namespace kv::metrics

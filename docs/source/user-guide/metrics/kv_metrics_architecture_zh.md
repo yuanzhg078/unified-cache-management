@@ -1,16 +1,16 @@
-# ASU Metrics 设计：Standalone 与 UCM 统一兼容方案
+# KV Metrics 设计：Standalone 与 UCM 统一兼容方案
 
 ## 1. 文档目的
 
 本文统一说明以下内容：
 
-- ASU metrics 的设计分层和运行时结构；
+- KV metrics 的设计分层和运行时结构；
 - `kv-test` standalone 模式的启动、采集、抓取和退出时序；
-- ASU client/transport 一次异步任务的指标时序；
-- ASU 接入 UCM/vLLM metrics 的数据链路；
+- KV client/transport 一次异步任务的指标时序；
+- KV 接入 UCM/vLLM metrics 的数据链路；
 - standalone 与 UCM 两种模式如何保持指标兼容。
 
-本文以当前代码为准。核心结论是：**ASU 业务代码只依赖一套 metrics facade 和一套指标定义，运行宿主负责选择且只能选择一个 backend。**
+本文以当前代码为准。核心结论是：**KV 业务代码只依赖一套 metrics facade 和一套指标定义，运行宿主负责选择且只能选择一个 backend。**
 
 本文同时是 standalone/UCM 兼容性的唯一维护文档。原 standalone 兼容性指南中的方案推演、实施记录和当前架构已经合并到本文；历史设计不再与当前实现并列维护。
 
@@ -26,7 +26,7 @@
 └───────────────────────────┬────────────────────────────────┘
                             │
 ┌───────────────────────────▼────────────────────────────────┐
-│ ASU Metrics Facade：libasu_metrics.so                       │
+│ KV Metrics Facade：libkv_metrics.so                       │
 │ Initialize / Shutdown / Update / BuiltinBatch               │
 │ 全进程共享一个当前 backend；未启用时是低成本 no-op           │
 └───────────────────────────┬────────────────────────────────┘
@@ -52,14 +52,14 @@
 
 | 层 | 当前实现 | 职责 |
 | --- | --- | --- |
-| 指标定义 | `asu_metrics/metric_names.h` | 集中定义内置 `MetricId`、名称、类型和 HELP 文本 |
-| facade | `asu_metrics/metrics.h`、`metrics.cc` | 隔离业务埋点与具体采集/导出实现，管理唯一 backend |
+| 指标定义 | `kv_metrics/metric_names.h` | 集中定义内置 `MetricId`、名称、类型和 HELP 文本 |
+| facade | `kv_metrics/metrics.h`、`metrics.cc` | 隔离业务埋点与具体采集/导出实现，管理唯一 backend |
 | backend | `standalone_metrics_backend.cc`、`ucm_metrics_backend.cc` | standalone 自采集，或转发给 UCM collector |
 | exporter | standalone HTTP server，或 UCM Python logger | 输出 Prometheus exposition format |
 
-### 2.2 为什么需要 ASU 自己的 facade
+### 2.2 为什么需要 KV 自己的 facade
 
-ASU 可以作为独立 transport/client 交付，不应强制依赖 UCM、Python 或 vLLM。facade 让 ASU 埋点保持不变：
+KV 可以作为独立 transport/client 交付，不应强制依赖 UCM、Python 或 vLLM。facade 让 KV 埋点保持不变：
 
 ```cpp
 Metrics::UpdateBuiltinBatch(updates, count);
@@ -84,21 +84,21 @@ descriptor 的类型决定更新语义：`COUNTER` 累加、`GAUGE` 覆盖、`HI
 
 ### 2.3 进程内单例和共享库约束
 
-`asu_client`、`asu_transport` 和宿主必须解析到同一份 `libasu_metrics.so.1`，否则会出现“业务写入单例 A，exporter 读取单例 B”的问题。
+`asu_client`、`asu_transport` 和宿主必须解析到同一份 `libkv_metrics.so.1`，否则会出现“业务写入单例 A，exporter 读取单例 B”的问题。
 
-构建上，`libasu_metrics.so.1` 只包含 facade；`asu_metrics_standalone` 是仅由 `kv-test` 和
-ASU standalone 单测链接的静态 backend，`asu_metrics_ucm_adapter` 是仅由 `AsuStore` 链接的静态
+构建上，`libkv_metrics.so.1` 只包含 facade；`kv_metrics_standalone` 是仅由 `kv-test` 和
+KV standalone 单测链接的静态 backend，`kv_metrics_ucm_adapter` 是仅由 `AsuStore` 链接的静态
 backend。因此构建 `asustore` target 不会编译 standalone exporter，构建 `kv-test` target 不会链接
 UCM adapter；两个宿主仍共享同一份 facade 单例。
 
-UCM 路径还要求 `asu_metrics_ucm_adapter` 与 Python `ucmmetrics` 解析到同一份 `libucm_metrics.so.1`。当前 `ucm/shared/metrics/CMakeLists.txt` 已将 collector 构建为 `SHARED`，这是 ASU 指标能被 Python drain 到的前提。
+UCM 路径还要求 `kv_metrics_ucm_adapter` 与 Python `ucmmetrics` 解析到同一份 `libucm_metrics.so.1`。当前 `ucm/shared/metrics/CMakeLists.txt` 已将 collector 构建为 `SHARED`，这是 KV 指标能被 Python drain 到的前提。
 
 可在安装包中验证：
 
 ```bash
-ldd ./kv-test | grep asu_metrics
-ldd ./libkv_client.so | grep asu_metrics
-ldd ./libkv_transport.so | grep asu_metrics
+ldd ./kv-test | grep kv_metrics
+ldd ./libkv_client.so | grep kv_metrics
+ldd ./libkv_transport.so | grep kv_metrics
 
 ldd ./libasustore.so | grep ucm_metrics
 ldd ./ucmmetrics*.so | grep ucm_metrics
@@ -113,14 +113,14 @@ ldd ./ucmmetrics*.so | grep ucm_metrics
 ```text
 kv-test
   ├─ 初始化 StandaloneMetricsBackend
-  ├─ ASU client/transport 写线程本地双 buffer
+  ├─ KV client/transport 写线程本地双 buffer
   ├─ aggregation thread 定时合并为进程级累计快照
   └─ HTTP thread 从只读快照返回 /metrics
 
 Prometheus --scrape--> kv-test:/metrics --query--> Grafana
 ```
 
-standalone backend 完全位于 ASU metrics 模块内，不依赖 `UC::Metrics`、Python `prometheus_client` 或 vLLM。
+standalone backend 完全位于 KV metrics 模块内，不依赖 `UC::Metrics`、Python `prometheus_client` 或 vLLM。
 
 ### 3.2 当前 standalone 内部架构
 
@@ -188,7 +188,7 @@ sequenceDiagram
     participant MB as Standalone Backend
     participant Agg as Aggregator Thread
     participant HTTP as HTTP Server
-    participant ASU as ASU Client/Transport
+    participant KV as KV Client/Transport
     participant P as Prometheus
 
     Main->>MR: Start(config.metrics)
@@ -198,9 +198,9 @@ sequenceDiagram
     MB->>MB: 校验全部内置指标存在且类型一致
     MB->>Agg: StartAggregation(interval)
     MB->>HTTP: Listen(address:port)
-    Main->>ASU: Init() + RunCommand()
+    Main->>KV: Init() + RunCommand()
     loop 业务线程
-        ASU->>MB: UpdateBuiltinBatch(...)
+        KV->>MB: UpdateBuiltinBatch(...)
     end
     loop 每 aggregation_interval_ms
         Agg->>Agg: 切换并 drain 线程 buffer
@@ -211,7 +211,7 @@ sequenceDiagram
         HTTP->>Agg: Render(累计快照)
         HTTP-->>P: Prometheus text format
     end
-    Main->>ASU: Shutdown()
+    Main->>KV: Shutdown()
     Main->>MR: Stop()
     MR->>MB: Flush()
     opt shutdown_grace_ms > 0
@@ -226,7 +226,7 @@ sequenceDiagram
 
 - HTTP 请求只读累计快照，不触发 destructive drain；多个 curl/Prometheus 请求不会互相“抢数据”。
 - Counter 保存进程生命周期累计值；Gauge 保存最新值；Histogram 直接累计 bucket、sum 和 count，不保存无限增长的原始样本。
-- `kv-test` 先关闭 ASU 业务线程，再 flush 和关闭 exporter，确保 completion 指标不会落在最后一次 drain 之后。
+- `kv-test` 先关闭 KV 业务线程，再 flush 和关闭 exporter，确保 completion 指标不会落在最后一次 drain 之后。
 - `config check` 只校验配置，不监听 metrics 端口。
 
 ### 3.4 Standalone 配置
@@ -241,12 +241,12 @@ metrics.port=9108
 metrics.path=/metrics
 metrics.source=kv-test
 metrics.model_name=standalone
-metrics.worker_id=asu-0
+metrics.worker_id=kv-0
 metrics.aggregation_interval_ms=500
 metrics.shutdown_grace_ms=15000
 ```
 
-`metrics_configs.yaml` 是公共 exporter 定义，提供 `metric_prefix`、指标类型、HELP 文本和 Histogram buckets。standalone 会先注册编译期内置指标，再用 YAML 中的同名项覆盖文档和 buckets；YAML 未列出的内置指标继续使用编译期默认值，但把同名内置指标改成另一种类型会启动失败。为了和 UCM exporter 保持完全一致，公共 YAML 仍应列出全部 ASU 内置指标。
+`metrics_configs.yaml` 是公共 exporter 定义，提供 `metric_prefix`、指标类型、HELP 文本和 Histogram buckets。standalone 会先注册编译期内置指标，再用 YAML 中的同名项覆盖文档和 buckets；YAML 未列出的内置指标继续使用编译期默认值，但把同名内置指标改成另一种类型会启动失败。为了和 UCM exporter 保持完全一致，公共 YAML 仍应列出全部 KV 内置指标。
 
 ### 3.5 短生命周期命令
 
@@ -255,11 +255,11 @@ Prometheus 是 pull 模型。`store`、`retrieve` 等单次命令可能在第一
 - 长时间 `bench` 场景可直接持续抓取；
 - 单次命令应配置 `metrics.shutdown_grace_ms`，在 final flush 后保留一次抓取窗口；
 - 如果要持续观察多轮命令，更适合使用长驻服务模式；
-- Pushgateway 可作为批任务补充，但不应成为标准 ASU 服务链路。
+- Pushgateway 可作为批任务补充，但不应成为标准 KV 服务链路。
 
-## 4. ASU 业务任务与埋点时序
+## 4. KV 业务任务与埋点时序
 
-ASU API 是异步的。`StoreAsync/LoadAsync/...` 返回 OK 只表示 client 接受任务，不代表远端 I/O 已完成。提交时延、排队时延、发送时延和最终完成时延必须分开理解。
+KV API 是异步的。`StoreAsync/LoadAsync/...` 返回 OK 只表示 client 接受任务，不代表远端 I/O 已完成。提交时延、排队时延、发送时延和最终完成时延必须分开理解。
 
 ```mermaid
 sequenceDiagram
@@ -270,7 +270,7 @@ sequenceDiagram
     participant TQ as Transport Queue
     participant Exec as TransportTaskExecutor
     participant Provider
-    participant Remote as ASU Device/Server
+    participant Remote as KV Device/Server
 
     Caller->>Client: StoreAsync(entries)
     Client->>Client: requests/entries += 1/N
@@ -306,17 +306,17 @@ sequenceDiagram
 
 | 分组 | 指标模式 | 含义 |
 | --- | --- | --- |
-| Client API | `asu_client_<op>_requests_total` | query/load/store/batch-load/batch-store/delete 的提交次数 |
-| Client API | `asu_client_<op>_entries_total` | 提交的 key/entry 数，不是 task 数 |
-| Client API | `asu_client_<op>_errors_total` | API 提交失败次数 |
-| Client API | `asu_client_<op>_submit_duration_seconds` | 同步 API 调用耗时，不包含异步完成 |
-| Wait | `asu_client_wait_{requests,errors}_total`、`asu_client_wait_duration_seconds` | 调用者等待行为 |
-| Client task | `asu_client_task_{enqueue,queue,process,pre_send,send,duration}_seconds` | client 内部各阶段及端到端耗时 |
-| Transport task | `asu_transport_task_{queue,process,pre_send,send,completion}_duration_seconds` | transport 排队、提交和完成阶段耗时 |
-| Fake backend | `asu_fake_backend_task_{queue,process}_duration_seconds` | 仅 fake provider：worker 排队，以及 worker 开始到 CQE 发布完成（包括 `fake_backend.latency_ms` sleep 和 fake KV 操作） |
-| Exporter | `asu_metrics_exporter_up`、`asu_metrics_exporter_http_requests_total` | standalone exporter 自监控 |
+| Client API | `kv_client_<op>_requests_total` | query/load/store/batch-load/batch-store/delete 的提交次数 |
+| Client API | `kv_client_<op>_entries_total` | 提交的 key/entry 数，不是 task 数 |
+| Client API | `kv_client_<op>_errors_total` | API 提交失败次数 |
+| Client API | `kv_client_<op>_submit_duration_seconds` | 同步 API 调用耗时，不包含异步完成 |
+| Wait | `kv_client_wait_{requests,errors}_total`、`kv_client_wait_duration_seconds` | 调用者等待行为 |
+| Client task | `kv_client_task_{enqueue,queue,process,pre_send,send,duration}_seconds` | client 内部各阶段及端到端耗时 |
+| Transport task | `kv_transport_task_{queue,process,pre_send,send,completion}_duration_seconds` | transport 排队、提交和完成阶段耗时 |
+| Fake backend | `kv_fake_backend_task_{queue,process}_duration_seconds` | 仅 fake provider：worker 排队，以及 worker 开始到 CQE 发布完成（包括 `fake_backend.latency_ms` sleep 和 fake KV 操作） |
+| Exporter | `kv_metrics_exporter_up`、`kv_metrics_exporter_http_requests_total` | standalone exporter 自监控 |
 
-其中 `asu_client_task_duration_seconds` 是从 client API 入口到最终完成；`asu_client_<op>_submit_duration_seconds` 只是提交 API 返回前的同步耗时，二者不能互相替代。
+其中 `kv_client_task_duration_seconds` 是从 client API 入口到最终完成；`kv_client_<op>_submit_duration_seconds` 只是提交 API 返回前的同步耗时，二者不能互相替代。
 
 ### 4.2 指标计数口径
 
@@ -324,7 +324,7 @@ sequenceDiagram
 - 一个 client request 可能按路由拆成多个 transport task；因此 transport 样本数可大于 request 数。
 - `Wait` 超时描述调用者等待失败，任务之后仍可能成功，不能直接等同于最终 I/O 失败。
 - 所有 duration 使用 `steady_clock` 计算，Prometheus 单位统一为 seconds。
-- 指标名不拼接 key、ASU ID、连接 ID 等动态值，避免高基数时序。
+- 指标名不拼接 key、KV ID、连接 ID 等动态值，避免高基数时序。
 
 ## 5. UCM/vLLM 模式
 
@@ -334,7 +334,7 @@ sequenceDiagram
 sequenceDiagram
     participant V as vLLM/UCM
     participant S as AsuStore
-    participant F as libasu_metrics facade
+    participant F as libkv_metrics facade
     participant A as UCM Adapter
     participant C as libucm_metrics collector
     participant L as PrometheusStatsLogger
@@ -346,7 +346,7 @@ sequenceDiagram
     F->>A: Start()
     A->>C: SetUp() + CreateStats(descriptors)
     V->>S: Lookup/Load/Dump
-    S->>F: ASU client/transport 埋点
+    S->>F: KV client/transport 埋点
     F->>A: UpdateBuiltinBatch
     A->>C: UpdateStats(name, value)
     loop log_interval
@@ -355,7 +355,7 @@ sequenceDiagram
         L->>L: 更新 Python Prometheus objects
     end
     P->>E: GET /metrics
-    E-->>P: UCM + ASU metrics
+    E-->>P: UCM + KV metrics
     V->>S: Destroy/Shutdown
     S->>F: Shutdown owned backend
 ```
@@ -371,7 +371,7 @@ UCM collector 返回本轮 delta/原始 Histogram samples，Python `PrometheusSt
 - Python UCM exporter；
 - 另一个直接 drain `UC::Metrics` 的 exporter。
 
-ASU standalone backend 不读取 `UC::Metrics`，但 facade 本身也只允许一个 active backend，所以一个 ASU 进程仍应明确选择 standalone 或 UCM，而不是双写。
+KV standalone backend 不读取 `UC::Metrics`，但 facade 本身也只允许一个 active backend，所以一个 KV 进程仍应明确选择 standalone 或 UCM，而不是双写。
 
 ## 6. 两种模式的兼容契约
 
@@ -379,7 +379,7 @@ ASU standalone backend 不读取 `UC::Metrics`，但 facade 本身也只允许�
 
 | 维度 | 兼容要求 | 当前来源 |
 | --- | --- | --- |
-| 指标基础名 | 完全一致 | `ASU_BUILTIN_METRIC_LIST` |
+| 指标基础名 | 完全一致 | `KV_BUILTIN_METRIC_LIST` |
 | 指标类型 | Counter/Gauge/Histogram 不可漂移 | 编译期 descriptor + YAML 启动校验 |
 | 单位 | duration 使用 seconds；数量使用 count | 指标名与 HELP 文本 |
 | Histogram buckets | 两种 exporter 使用相同 YAML buckets | `metrics_configs.yaml` |
@@ -391,7 +391,7 @@ ASU standalone backend 不读取 `UC::Metrics`，但 facade 本身也只允许�
 
 ```promql
 sum by (model_name, worker_id) (
-  rate(ucm:asu_client_store_requests_total[5m])
+  rate(ucm:kv_client_store_requests_total[5m])
 )
 ```
 
@@ -400,7 +400,7 @@ sum by (model_name, worker_id) (
 standalone 当前输出：
 
 ```text
-source="kv-test", model_name="standalone", worker_id="asu-0"
+source="kv-test", model_name="standalone", worker_id="kv-0"
 ```
 
 UCM Python exporter 当前只统一添加：
@@ -416,7 +416,7 @@ model_name="...", worker_id="..."
 standalone 的指标定义只来自两处：`metric_names.h` 提供编译期内置指标，
 `metrics_configs.yaml` 在启动期覆盖内置定义或新增字符串指标。两类指标的接入方式不同：
 
-1. 高频、需要 `UpdateBuiltinBatch()` 的内置指标：在 `ASU_BUILTIN_METRIC_LIST` 增加 ID、基础名、类型和说明；如需统一 HELP 或 Histogram buckets，再在 YAML 增加同名定义。
+1. 高频、需要 `UpdateBuiltinBatch()` 的内置指标：在 `KV_BUILTIN_METRIC_LIST` 增加 ID、基础名、类型和说明；如需统一 HELP 或 Histogram buckets，再在 YAML 增加同名定义。
 2. 仅在启动前确定的低频自定义指标：只在 `metrics_configs.yaml` 新增定义，业务侧通过 `Update(name, value)` 写入；它没有编译期 `MetricId`，不能传给 `UpdateBuiltinBatch()`。
 3. standalone 单测验证 YAML 类型校验和 exposition；UCM 测试验证 `UC::Metrics` 可 drain 到需要在 UCM 模式暴露的指标；dashboard 查询只使用两种模式共有的名称、单位和标签。
 
@@ -424,10 +424,10 @@ standalone 的指标定义只来自两处：`metric_names.h` 提供编译期内�
 
 | 项目 | Standalone | UCM/vLLM |
 | --- | --- | --- |
-| 宿主 | `kv-test` 或纯 C++ ASU 进程 | UCM `AsuStore` / vLLM worker |
+| 宿主 | `kv-test` 或纯 C++ KV 进程 | UCM `AsuStore` / vLLM worker |
 | backend | `StandaloneMetricsBackend` | `UcmMetricsBackend` adapter |
-| collector | ASU 自带线程 buffer + 累计快照 | `libucm_metrics.so` 双 buffer |
-| exporter | ASU 内置 HTTP server | Python `PrometheusStatsLogger` + vLLM endpoint |
+| collector | KV 自带线程 buffer + 累计快照 | `libucm_metrics.so` 双 buffer |
+| exporter | KV 内置 HTTP server | Python `PrometheusStatsLogger` + vLLM endpoint |
 | endpoint | 独立 `:<port>/metrics` | vLLM `:<port>/metrics` |
 | Histogram | C++ 直接累计 bucket/sum/count | C++ 原始样本，Python Histogram 累计 |
 | 标签 | `source/model_name/worker_id` | `model_name/worker_id` |
@@ -435,8 +435,8 @@ standalone 的指标定义只来自两处：`metric_names.h` 提供编译期内�
 
 选择规则很简单：
 
-- ASU 由 `kv-test` 或无 UCM 依赖的纯 C++ 进程拉起：选 standalone；
-- ASU 作为 UCM `AsuStore` 的实现并由 vLLM 暴露 metrics：选 UCM adapter；
+- KV 由 `kv-test` 或无 UCM 依赖的纯 C++ 进程拉起：选 standalone；
+- KV 作为 UCM `AsuStore` 的实现并由 vLLM 暴露 metrics：选 UCM adapter；
 - 同一进程不要同时初始化两个 backend。
 
 ## 8. 验证建议
@@ -458,20 +458,20 @@ standalone collector 还必须通过“业务线程持续批量写入，同时�
 curl -s http://127.0.0.1:8000/metrics | grep '^ucm:asu_'
 ```
 
-如果 ASU 代码有埋点但 endpoint 为空，按顺序检查：
+如果 KV 代码有埋点但 endpoint 为空，按顺序检查：
 
-1. `AsuStore` 是否在 `BUILD_UCM_ASU=ON` 的构建中生成；该构建固定包含 UCM metrics adapter；
+1. `AsuStore` 是否在 `BUILD_UCM_KV=ON` 的构建中生成；该构建固定包含 UCM metrics adapter；
 2. `libasustore.so` 与 `ucmmetrics.so` 是否加载同一份 `libucm_metrics.so.1`；
 3. `metrics_configs.yaml` 是否存在完全同名且同类型的定义；
 4. `PrometheusStatsLogger` 是否启动并已经过至少一个 `log_interval`；
-5. ASU 执行和 Python logger 是否位于同一 worker 进程。
+5. KV 执行和 Python logger 是否位于同一 worker 进程。
 
 ## 9. 代码索引
 
 | 内容 | 文件 |
 | --- | --- |
-| facade 与 backend 接口 | `kv_semantics/metrics/include/asu_metrics/metrics.h` |
-| 内置指标清单 | `kv_semantics/metrics/include/asu_metrics/metric_names.h` |
+| facade 与 backend 接口 | `kv_semantics/metrics/include/kv_metrics/metrics.h` |
+| 内置指标清单 | `kv_semantics/metrics/include/kv_metrics/metric_names.h` |
 | facade 生命周期 | `kv_semantics/metrics/src/metrics.cc` |
 | standalone collector/exporter | `kv_semantics/metrics/src/standalone_metrics_backend.cc` |
 | standalone 并发聚合测试 | `kv_semantics/tests/metrics/standalone_metrics_test.cc` |

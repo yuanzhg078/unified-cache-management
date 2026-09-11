@@ -1,9 +1,9 @@
-#include "asu_metrics/metrics.h"
+#include "kv_metrics/metrics.h"
 #include <atomic>
 #include <mutex>
 #include <utility>
 
-namespace UC::ASU::Metrics {
+namespace kv::metrics {
 namespace {
 
 std::mutex gBackendMutex;
@@ -103,15 +103,15 @@ void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates, std::size_t count) n
     if (backend) { backend->UpdateBuiltinBatch(updates, count); }
 }
 
-std::vector<MetricDescriptor> DefaultAsuMetricDescriptors()
+std::vector<MetricDescriptor> DefaultKvMetricDescriptors()
 {
     std::vector<MetricDescriptor> descriptors;
     descriptors.reserve(kBuiltinMetricCount);
-#define ASU_APPEND_BUILTIN_DESCRIPTOR(id, name, type, documentation) \
+#define KV_APPEND_BUILTIN_DESCRIPTOR(id, name, type, documentation) \
     descriptors.emplace_back(MakeBuiltinDescriptor(name, MetricType::type, documentation));
-    ASU_BUILTIN_METRIC_LIST(ASU_APPEND_BUILTIN_DESCRIPTOR)
-#undef ASU_APPEND_BUILTIN_DESCRIPTOR
+    KV_BUILTIN_METRIC_LIST(KV_APPEND_BUILTIN_DESCRIPTOR)
+#undef KV_APPEND_BUILTIN_DESCRIPTOR
     return descriptors;
 }
 
-}  // namespace UC::ASU::Metrics
+}  // namespace kv::metrics

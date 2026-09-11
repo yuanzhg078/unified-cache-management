@@ -17,7 +17,7 @@ target_include_directories(kv.test PRIVATE
 target_link_libraries(kv.test PRIVATE
     kv_client
     kv_buffer_runtime
-    asu_metrics_standalone
+    kv_metrics_standalone
     gtest
 )
 gtest_discover_tests(kv.test)

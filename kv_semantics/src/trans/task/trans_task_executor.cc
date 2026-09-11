@@ -28,14 +28,14 @@
 #include <iterator>
 #include <string>
 #include <utility>
-#include "asu_metrics/metrics.h"
+#include "kv_metrics/metrics.h"
 #include "conn/connection_internal.h"
 #include "logger.h"
 #include "utils/trans_task_utils.h"
 
 namespace kv {
 
-namespace Metrics = UC::ASU::Metrics;
+namespace Metrics = kv::metrics;
 
 TransportTaskExecutor::TransportTaskExecutor(
     const TransportConfig& config, const std::shared_ptr<TransProvider>& transProvider,

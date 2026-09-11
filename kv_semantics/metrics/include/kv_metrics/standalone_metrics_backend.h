@@ -1,9 +1,9 @@
 #pragma once
 
 #include <map>
-#include "asu_metrics/metrics.h"
+#include "kv_metrics/metrics.h"
 
-namespace UC::ASU::Metrics {
+namespace kv::metrics {
 
 // Configuration and construction entry point for the self-contained C++
 // collector and Prometheus HTTP exporter. This header deliberately stays out
@@ -20,4 +20,4 @@ struct StandaloneMetricsConfig {
 
 std::shared_ptr<MetricsBackend> CreateStandaloneMetricsBackend(StandaloneMetricsConfig config);
 
-}  // namespace UC::ASU::Metrics
+}  // namespace kv::metrics
