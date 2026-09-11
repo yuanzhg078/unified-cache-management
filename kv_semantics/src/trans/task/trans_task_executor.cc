@@ -25,13 +25,17 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <string>
 #include <utility>
+#include "asu_metrics/metrics.h"
 #include "conn/connection_internal.h"
 #include "logger.h"
 #include "utils/trans_task_utils.h"
 
 namespace kv {
+
+namespace Metrics = UC::ASU::Metrics;
 
 TransportTaskExecutor::TransportTaskExecutor(
     const TransportConfig& config, const std::shared_ptr<TransProvider>& transProvider,
@@ -300,6 +304,7 @@ bool TransportTaskExecutor::Execute(const TransportTaskPtr& task)
                                              std::memory_order_acq_rel)) {
         return false;
     }
+    task->processingStartedAt = std::chrono::steady_clock::now();
 
     std::vector<TransportSubBatchContext> subBatchContexts;
     auto status = PrepareTaskSubBatches(*task, subBatchContexts);
@@ -313,8 +318,26 @@ bool TransportTaskExecutor::Execute(const TransportTaskPtr& task)
         KV_ERROR("Abort transport task before send task_id={} code={} message={}", task->taskId,
                  static_cast<int>(status.code), status.message);
     } else {
+        const auto preSendAt = std::chrono::steady_clock::now();
+        const Metrics::BuiltinMetricUpdate preSendUpdates[] = {
+            {Metrics::MetricId::TransportTaskPreSendDuration,
+             std::chrono::duration<double>(preSendAt - task->submittedAt).count()                },
+            {Metrics::MetricId::TransportTaskQueueDuration,
+             std::chrono::duration<double>(task->processingStartedAt - task->submittedAt).count()},
+            {Metrics::MetricId::TransportTaskProcessDuration,
+             std::chrono::duration<double>(preSendAt - task->processingStartedAt).count()        },
+        };
+        Metrics::UpdateBuiltinBatch(preSendUpdates, std::size(preSendUpdates));
+        task->NotifyPreSend();
         SendSubBatchBuffers(subBatchContexts, ioBatches);
     }
+    task->sendCompletedAt = std::chrono::steady_clock::now();
+    task->sendReturned.store(true, std::memory_order_release);
+    const Metrics::BuiltinMetricUpdate sendUpdate{
+        Metrics::MetricId::TransportTaskSendDuration,
+        std::chrono::duration<double>(task->sendCompletedAt - task->submittedAt).count()};
+    Metrics::UpdateBuiltinBatch(&sendUpdate, 1);
+    task->NotifySendComplete();
 
     bool done = false;
     {

@@ -1,0 +1,23 @@
+#pragma once
+
+#include <map>
+#include "asu_metrics/metrics.h"
+
+namespace UC::ASU::Metrics {
+
+// Configuration and construction entry point for the self-contained C++
+// collector and Prometheus HTTP exporter. This header deliberately stays out
+// of metrics.h so users of the facade do not depend on a concrete backend.
+struct StandaloneMetricsConfig {
+    std::string definitionPath;
+    std::string metricPrefix{"ucm:"};
+    std::string listenAddress{"127.0.0.1"};
+    std::uint16_t port{9108};
+    std::string metricsPath{"/metrics"};
+    std::uint32_t aggregationIntervalMs{500};
+    std::map<std::string, std::string> constantLabels;
+};
+
+std::shared_ptr<MetricsBackend> CreateStandaloneMetricsBackend(StandaloneMetricsConfig config);
+
+}  // namespace UC::ASU::Metrics

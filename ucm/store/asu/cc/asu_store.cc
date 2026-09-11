@@ -35,6 +35,8 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include "asu_metrics/metrics.h"
+#include "asu_metrics/ucm_metrics_backend.h"
 #include "kv_client.h"
 #include "logger/logger.h"
 #include "ucmstore_v1.h"
@@ -44,6 +46,36 @@ namespace UC::AsuStore {
 enum class TensorLayout { MLA, GQA, HMA };
 
 namespace {
+
+std::mutex gMetricsBackendMutex;
+std::size_t gMetricsBackendUsers{0};
+bool gOwnsMetricsBackend{false};
+
+bool AcquireMetricsBackend()
+{
+    std::lock_guard<std::mutex> lock{gMetricsBackendMutex};
+    if (gMetricsBackendUsers == 0 && !UC::ASU::Metrics::IsEnabled()) {
+        std::string error;
+        if (!UC::ASU::Metrics::Initialize(UC::ASU::Metrics::CreateUcmMetricsBackend(), &error)) {
+            UC_WARN("Failed to initialize ASU UCM metrics adapter: {}.", error);
+            return false;
+        }
+        gOwnsMetricsBackend = true;
+    }
+    ++gMetricsBackendUsers;
+    return true;
+}
+
+void ReleaseMetricsBackend()
+{
+    std::lock_guard<std::mutex> lock{gMetricsBackendMutex};
+    if (gMetricsBackendUsers == 0) { return; }
+    --gMetricsBackendUsers;
+    if (gMetricsBackendUsers == 0 && gOwnsMetricsBackend) {
+        UC::ASU::Metrics::Shutdown();
+        gOwnsMetricsBackend = false;
+    }
+}
 
 using AsuStatus = kv::Status;
 using AsuStatusCode = kv::StatusCode;
@@ -244,6 +276,7 @@ public:
             auto status = client_->Shutdown();
             if (!status.ok()) { UC_ERROR("Failed to shutdown ASU client: {}.", status.message); }
         }
+        if (metricsBackendAcquired_) { ReleaseMetricsBackend(); }
     }
 
     Status Setup(const Detail::Dictionary& inConfig) override
@@ -252,6 +285,8 @@ public:
         NormalizeAsuShardConfig(config);
         auto status = CheckConfig(config);
         if (status.Failure()) { return status; }
+
+        if (!metricsBackendAcquired_) { metricsBackendAcquired_ = AcquireMetricsBackend(); }
 
         tensorLayout_ = ParseTensorLayout(config.tensorLayout);
         config_ = std::move(config);
@@ -262,6 +297,10 @@ public:
         if (!asuStatus.ok()) {
             UC_ERROR("Failed to init ASU client: {}.", asuStatus.message);
             client_.reset();
+            if (metricsBackendAcquired_) {
+                ReleaseMetricsBackend();
+                metricsBackendAcquired_ = false;
+            }
             return ConvertStatus(asuStatus);
         }
 
@@ -828,6 +867,7 @@ private:
     Config config_;
     TensorLayout tensorLayout_{TensorLayout::MLA};
     std::unique_ptr<kv::KvClient> client_;
+    bool metricsBackendAcquired_{false};
     mutable std::mutex persistentRegionsMu_;
     std::vector<RegisteredPersistentRegion> persistentRegions_;
 #ifdef ASU_BUILD_TESTS

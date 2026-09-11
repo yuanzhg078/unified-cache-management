@@ -26,12 +26,22 @@
 
 #include <atomic>
 #include <climits>
+#include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <thread>
+#include <utility>
 
 namespace kv {
+
+struct SpscRingQueueStats {
+    std::uint64_t waitNotifiedCount{0};
+    std::uint64_t waitTimeoutCount{0};
+    std::uint64_t notifyCount{0};
+};
 
 template <typename T>
 class SpscRingQueue {
@@ -41,6 +51,9 @@ class SpscRingQueue {
     size_t mask_{0};
     size_t capacity_{0};
     std::unique_ptr<T[]> buffer_;
+    std::atomic<std::uint64_t> waitNotifiedCount_{0};
+    std::atomic<std::uint64_t> waitTimeoutCount_{0};
+    std::atomic<std::uint64_t> notifyCount_{0};
 
     size_t Mod(size_t n) { return pow2_ ? (n & mask_) : (n % capacity_); }
 
@@ -69,11 +82,18 @@ public:
 
     bool TryPush(T&& value)
     {
+        return TryPushBeforePublish(std::move(value), [] {});
+    }
+
+    template <typename BeforePublish>
+    bool TryPushBeforePublish(T&& value, BeforePublish&& beforePublish)
+    {
         const size_t currentHead = head_.load(std::memory_order_relaxed);
         const size_t nextHead = Mod(currentHead + 1);
         const size_t currentTail = tail_.load(std::memory_order_acquire);
         if (nextHead == currentTail) { return false; }
         buffer_[currentHead] = std::move(value);
+        std::invoke(std::forward<BeforePublish>(beforePublish));
         head_.store(nextHead, std::memory_order_release);
         return true;
     }
@@ -86,6 +106,21 @@ public:
         value = std::move(buffer_[currentTail]);
         tail_.store(Mod(currentTail + 1), std::memory_order_release);
         return true;
+    }
+
+    void NotifyOne(std::condition_variable& waitCondition)
+    {
+        waitCondition.notify_one();
+        notifyCount_.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    SpscRingQueueStats TakeStats()
+    {
+        return {
+            waitNotifiedCount_.exchange(0, std::memory_order_relaxed),
+            waitTimeoutCount_.exchange(0, std::memory_order_relaxed),
+            notifyCount_.exchange(0, std::memory_order_relaxed),
+        };
     }
 
     template <typename ConsumerHandler, typename... Args>
@@ -112,6 +147,45 @@ public:
                 std::this_thread::sleep_for(std::chrono::microseconds(50));
                 spinCount = 0;
             }
+        }
+    }
+
+    template <typename ConsumerHandler, typename... Args>
+    void ConsumerLoop(const std::atomic_bool& stop, std::mutex& waitMutex,
+                      std::condition_variable& waitCondition, ConsumerHandler&& handler,
+                      Args&&... args)
+    {
+        constexpr size_t kSpinLimit = 16;
+        constexpr size_t kTaskBatch = 64;
+        size_t spinCount = 0;
+        size_t taskCount = 0;
+        while (!stop.load(std::memory_order_relaxed)) {
+            T task;
+            if (TryPop(task)) {
+                spinCount = 0;
+                std::invoke(handler, std::forward<Args>(args)..., std::move(task));
+                if (++taskCount % kTaskBatch == 0 && stop.load(std::memory_order_acquire)) {
+                    break;
+                }
+                continue;
+            }
+            if (++spinCount < kSpinLimit) {
+                std::this_thread::yield();
+                continue;
+            }
+            std::unique_lock<std::mutex> lock(waitMutex);
+            const bool notified =
+                waitCondition.wait_for(lock, std::chrono::microseconds(50), [this, &stop] {
+                    return stop.load(std::memory_order_acquire) ||
+                           head_.load(std::memory_order_acquire) !=
+                               tail_.load(std::memory_order_relaxed);
+                });
+            if (notified) {
+                waitNotifiedCount_.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                waitTimeoutCount_.fetch_add(1, std::memory_order_relaxed);
+            }
+            spinCount = 0;
         }
     }
 };

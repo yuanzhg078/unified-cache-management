@@ -23,9 +23,12 @@
  * */
 #include "kv_client_impl.h"
 #include <algorithm>
+#include <chrono>
+#include <iterator>
 #include <limits>
 #include <thread>
 #include <utility>
+#include "asu_metrics/metrics.h"
 #include "device.h"
 #include "event.h"
 #include "kv_types.h"
@@ -35,6 +38,69 @@
 #include "utils/config_utils.h"
 
 namespace kv {
+
+namespace Metrics = UC::ASU::Metrics;
+
+namespace {
+
+struct SubmitMetricIds {
+    Metrics::MetricId requests;
+    Metrics::MetricId entries;
+    Metrics::MetricId errors;
+    Metrics::MetricId duration;
+};
+
+bool GetSubmitMetricIds(AsuOpType opType, SubmitMetricIds& ids)
+{
+    using Metrics::MetricId;
+    switch (opType) {
+        case AsuOpType::QUERY:
+            ids = {MetricId::QueryRequests, MetricId::QueryEntries, MetricId::QueryErrors,
+                   MetricId::QuerySubmitDuration};
+            return true;
+        case AsuOpType::LOAD:
+            ids = {MetricId::LoadRequests, MetricId::LoadEntries, MetricId::LoadErrors,
+                   MetricId::LoadSubmitDuration};
+            return true;
+        case AsuOpType::STORE:
+            ids = {MetricId::StoreRequests, MetricId::StoreEntries, MetricId::StoreErrors,
+                   MetricId::StoreSubmitDuration};
+            return true;
+        case AsuOpType::BATCH_LOAD:
+            ids = {MetricId::BatchLoadRequests, MetricId::BatchLoadEntries,
+                   MetricId::BatchLoadErrors, MetricId::BatchLoadSubmitDuration};
+            return true;
+        case AsuOpType::BATCH_STORE:
+            ids = {MetricId::BatchStoreRequests, MetricId::BatchStoreEntries,
+                   MetricId::BatchStoreErrors, MetricId::BatchStoreSubmitDuration};
+            return true;
+        case AsuOpType::DELETE:
+            ids = {MetricId::DeleteRequests, MetricId::DeleteEntries, MetricId::DeleteErrors,
+                   MetricId::DeleteSubmitDuration};
+            return true;
+        default: return false;
+    }
+}
+
+void RecordSubmit(AsuOpType opType, std::size_t entryCount, const Status& status,
+                  const Metrics::MetricTimer& timer)
+{
+    if (!timer.enabled) { return; }
+    SubmitMetricIds ids{};
+    if (!GetSubmitMetricIds(opType, ids)) { return; }
+    const auto elapsed =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - timer.begin).count();
+    Metrics::BuiltinMetricUpdate updates[] = {
+        {ids.requests, 1.0                            },
+        {ids.entries,  static_cast<double>(entryCount)},
+        {ids.duration, elapsed                        },
+        {ids.errors,   status.ok() ? 0.0 : 1.0        },
+    };
+    const auto count = status.ok() ? std::size(updates) - 1 : std::size(updates);
+    Metrics::UpdateBuiltinBatch(updates, count);
+}
+
+}  // namespace
 
 constexpr std::uint32_t kMaxShutdownDrainAttempts = 64;
 
@@ -131,6 +197,7 @@ Status KvClientImpl::Shutdown()
         std::lock_guard<std::mutex> lock{producerMu_};
         stopWorker_.store(true, std::memory_order_release);
     }
+    workerCv_.notify_one();
     JoinBackgroundRefresh();
     if (worker_.joinable()) { worker_.join(); }
 
@@ -179,54 +246,90 @@ Status KvClientImpl::Shutdown()
 
 Status KvClientImpl::QueryAsync(const std::vector<CacheKey>& keys, TaskId& taskId)
 {
-    auto status = SubmitAsync(AsuOpType::QUERY, keys, taskId);
+    const auto taskStart = std::chrono::steady_clock::now();
+    const auto timer = Metrics::StartTimer();
+    auto status = SubmitAsync(AsuOpType::QUERY, keys, taskId, taskStart);
+    RecordSubmit(AsuOpType::QUERY, keys.size(), status, timer);
     if (IsRefreshNeeded(status)) { RequestBackgroundRefresh(); }
     return status;
 }
 
 Status KvClientImpl::LoadAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::LOAD, entries, taskId);
+    const auto taskStart = std::chrono::steady_clock::now();
+    const auto timer = Metrics::StartTimer();
+    auto status = SubmitAsync(AsuOpType::LOAD, entries, taskId, 0, taskStart);
+    RecordSubmit(AsuOpType::LOAD, entries.size(), status, timer);
+    return status;
 }
 
 Status KvClientImpl::StoreAsync(const std::vector<KVBuffer>& entries, TaskId& taskId,
                                 std::uintptr_t eventHandle)
 {
-    return SubmitAsync(AsuOpType::STORE, entries, taskId, eventHandle);
+    const auto taskStart = std::chrono::steady_clock::now();
+    const auto timer = Metrics::StartTimer();
+    auto status = SubmitAsync(AsuOpType::STORE, entries, taskId, eventHandle, taskStart);
+    RecordSubmit(AsuOpType::STORE, entries.size(), status, timer);
+    return status;
 }
 
 Status KvClientImpl::StoreAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::STORE, entries, taskId);
+    return StoreAsync(entries, taskId, 0);
 }
 
 Status KvClientImpl::BatchLoadAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::BATCH_LOAD, entries, taskId);
+    const auto taskStart = std::chrono::steady_clock::now();
+    const auto timer = Metrics::StartTimer();
+    auto status = SubmitAsync(AsuOpType::BATCH_LOAD, entries, taskId, 0, taskStart);
+    RecordSubmit(AsuOpType::BATCH_LOAD, entries.size(), status, timer);
+    return status;
 }
 
 Status KvClientImpl::BatchStoreAsync(const std::vector<KVBuffer>& entries, TaskId& taskId,
                                      std::uintptr_t eventHandle)
 {
-    return SubmitAsync(AsuOpType::BATCH_STORE, entries, taskId, eventHandle);
+    const auto taskStart = std::chrono::steady_clock::now();
+    const auto timer = Metrics::StartTimer();
+    auto status = SubmitAsync(AsuOpType::BATCH_STORE, entries, taskId, eventHandle, taskStart);
+    RecordSubmit(AsuOpType::BATCH_STORE, entries.size(), status, timer);
+    return status;
 }
 
 Status KvClientImpl::BatchStoreAsync(const std::vector<KVBuffer>& entries, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::BATCH_STORE, entries, taskId);
+    return BatchStoreAsync(entries, taskId, 0);
 }
 
 Status KvClientImpl::DeleteAsync(const std::vector<CacheKey>& keys, TaskId& taskId)
 {
-    return SubmitAsync(AsuOpType::DELETE, keys, taskId);
+    const auto taskStart = std::chrono::steady_clock::now();
+    const auto timer = Metrics::StartTimer();
+    auto status = SubmitAsync(AsuOpType::DELETE, keys, taskId, taskStart);
+    RecordSubmit(AsuOpType::DELETE, keys.size(), status, timer);
+    return status;
 }
 
 bool KvClientImpl::Check(TaskId taskId) { return taskManager_.Check(taskId); }
 
 Status KvClientImpl::Wait(TaskId taskId, std::uint64_t timeoutMs, TaskResult& result)
 {
+    const auto timer = Metrics::StartTimer();
     const auto waitMs = timeoutMs == 0 ? config_.defaultWaitTimeoutMs : timeoutMs;
     auto status = taskManager_.Wait(taskId, waitMs, result);
+    if (timer.enabled) {
+        const auto elapsed =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - timer.begin).count();
+        Metrics::BuiltinMetricUpdate updates[] = {
+            {Metrics::MetricId::WaitRequests, 1.0                                          },
+            {Metrics::MetricId::WaitDuration, elapsed                                      },
+            {Metrics::MetricId::WaitErrors,   status.ok() && result.status.ok() ? 0.0 : 1.0},
+        };
+        const auto count =
+            status.ok() && result.status.ok() ? std::size(updates) - 1 : std::size(updates);
+        Metrics::UpdateBuiltinBatch(updates, count);
+    }
     if (status.code == StatusCode::TASK_NOT_FOUND) { return status; }
     if (viewServer_ != nullptr &&
         (viewServer_->ShouldRefreshView(status) || viewServer_->ShouldRefreshView(result))) {
@@ -343,7 +446,8 @@ Status KvClientImpl::RegisterRegionsOnce(const std::vector<MemoryRegion>& region
 }
 
 Status KvClientImpl::SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>& entries,
-                                 TaskId& taskId, std::uintptr_t eventHandle)
+                                 TaskId& taskId, std::uintptr_t eventHandle,
+                                 std::chrono::steady_clock::time_point taskStart)
 {
     auto snapshot = GetSnapshot();
     if (!snapshot || !snapshot->router || snapshot->transports.empty()) {
@@ -359,6 +463,7 @@ Status KvClientImpl::SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>& 
     }
 
     auto ctx = std::make_unique<ClientTask>();
+    ctx->submittedAt = taskStart;
     ctx->opType = opType;
     ctx->prerequisiteEventHandle = eventHandle;
     ctx->viewSnapshot = snapshot;
@@ -390,17 +495,23 @@ Status KvClientImpl::SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>& 
             taskId = kInvalidTaskId;
             return NotInitialized();
         }
+        rawCtx->enqueuedAt = std::chrono::steady_clock::now();
         if (!taskQueue_.TryPush(std::move(rawCtx))) {
             (void)taskManager_.Remove(taskId);
             taskId = kInvalidTaskId;
             return Status::Error(StatusCode::RESOURCE_BUSY, "client task queue is full");
         }
     }
+    taskQueue_.NotifyOne(workerCv_);
+    const Metrics::BuiltinMetricUpdate enqueueUpdate{
+        Metrics::MetricId::ClientTaskEnqueueDuration,
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - taskStart).count()};
+    Metrics::UpdateBuiltinBatch(&enqueueUpdate, 1);
     return Status::OK();
 }
 
 Status KvClientImpl::SubmitAsync(AsuOpType opType, const std::vector<CacheKey>& keys,
-                                 TaskId& taskId)
+                                 TaskId& taskId, std::chrono::steady_clock::time_point taskStart)
 {
     auto snapshot = GetSnapshot();
     if (!snapshot || !snapshot->router || snapshot->transports.empty()) {
@@ -415,6 +526,7 @@ Status KvClientImpl::SubmitAsync(AsuOpType opType, const std::vector<CacheKey>& 
     }
 
     auto ctx = std::make_unique<ClientTask>();
+    ctx->submittedAt = taskStart;
     ctx->opType = opType;
     ctx->viewSnapshot = snapshot;
     ctx->keys = keys;
@@ -437,12 +549,18 @@ Status KvClientImpl::SubmitAsync(AsuOpType opType, const std::vector<CacheKey>& 
             taskId = kInvalidTaskId;
             return NotInitialized();
         }
+        rawCtx->enqueuedAt = std::chrono::steady_clock::now();
         if (!taskQueue_.TryPush(std::move(rawCtx))) {
             (void)taskManager_.Remove(taskId);
             taskId = kInvalidTaskId;
             return Status::Error(StatusCode::RESOURCE_BUSY, "client task queue is full");
         }
     }
+    taskQueue_.NotifyOne(workerCv_);
+    const Metrics::BuiltinMetricUpdate enqueueUpdate{
+        Metrics::MetricId::ClientTaskEnqueueDuration,
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - taskStart).count()};
+    Metrics::UpdateBuiltinBatch(&enqueueUpdate, 1);
     return Status::OK();
 }
 
@@ -452,6 +570,19 @@ void KvClientImpl::WorkerLoop()
     const auto deviceId = config_.transportConfigs.front().deviceId;
     const auto deviceStatus = deviceId >= 0 ? device.Setup(deviceId) : Status::OK();
     auto processTask = [this, &deviceStatus](ClientTaskPtr ctx) {
+        ctx->processingStartedAt = std::chrono::steady_clock::now();
+        const auto queueStats = taskQueue_.TakeStats();
+        const Metrics::BuiltinMetricUpdate queueUpdates[] = {
+            {Metrics::MetricId::ClientTaskQueueDuration,
+             std::chrono::duration<double>(ctx->processingStartedAt - ctx->enqueuedAt).count()},
+            {Metrics::MetricId::ClientTaskQueueWaitNotified,
+             static_cast<double>(queueStats.waitNotifiedCount)                                },
+            {Metrics::MetricId::ClientTaskQueueWaitTimeouts,
+             static_cast<double>(queueStats.waitTimeoutCount)                                 },
+            {Metrics::MetricId::ClientTaskQueueNotifies,
+             static_cast<double>(queueStats.notifyCount)                                      },
+        };
+        Metrics::UpdateBuiltinBatch(queueUpdates, std::size(queueUpdates));
         auto status = deviceStatus;
         if (status.ok() && ctx->prerequisiteEventHandle != 0) {
             status = runtime::SynchronizeEvent(ctx->prerequisiteEventHandle);
@@ -463,7 +594,7 @@ void KvClientImpl::WorkerLoop()
         }
         if (IsRefreshNeeded(status)) { RequestBackgroundRefresh(); }
     };
-    taskQueue_.ConsumerLoop(stopWorker_, processTask);
+    taskQueue_.ConsumerLoop(stopWorker_, producerMu_, workerCv_, processTask);
 
     ClientTaskPtr ctx;
     while (taskQueue_.TryPop(ctx)) { processTask(std::move(ctx)); }

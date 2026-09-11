@@ -1,8 +1,12 @@
 #include "trans_task_manager.h"
+#include <chrono>
 #include <utility>
+#include "asu_metrics/metrics.h"
 #include "utils/trans_task_utils.h"
 
 namespace kv {
+
+namespace Metrics = UC::ASU::Metrics;
 
 void FillEntryStatusFromCqeResult(const KvResponse& response,
                                   TransportSubBatchContext& subBatchContext)
@@ -24,6 +28,22 @@ bool TransportTask::NotifyCompletion(TaskResult result)
         return false;
     }
     onComplete(std::move(result));
+    return true;
+}
+
+bool TransportTask::NotifyPreSend()
+{
+    if (!onPreSend || preSendNotified.exchange(true, std::memory_order_acq_rel)) { return false; }
+    onPreSend();
+    return true;
+}
+
+bool TransportTask::NotifySendComplete()
+{
+    if (!onSendComplete || sendCompletionNotified.exchange(true, std::memory_order_acq_rel)) {
+        return false;
+    }
+    onSendComplete();
     return true;
 }
 
@@ -62,6 +82,13 @@ void TransportTask::TryFinalizeFromSubBatches()
 
 void TransportTaskManager::NotifyCompletion(const TransportTaskPtr& task)
 {
+    if (task->sendReturned.load(std::memory_order_acquire)) {
+        const Metrics::BuiltinMetricUpdate update{
+            Metrics::MetricId::TransportTaskCompletionDuration,
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - task->sendCompletedAt)
+                .count()};
+        Metrics::UpdateBuiltinBatch(&update, 1);
+    }
     TaskResult result;
     BuildResult(*task, result);
     (void)task->NotifyCompletion(std::move(result));

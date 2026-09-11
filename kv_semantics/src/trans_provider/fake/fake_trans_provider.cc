@@ -40,10 +40,13 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include "asu_metrics/metrics.h"
 #include "logger.h"
 #include "proto/kv_protocol.h"
 
 namespace kv {
+
+namespace Metrics = UC::ASU::Metrics;
 namespace {
 
 constexpr std::uint16_t kCqeSuccess = 0x000;
@@ -710,6 +713,7 @@ std::vector<Status> FakeTransProvider::Send(const std::vector<SendIoBatch>& ioBa
         std::memcpy(task.request.data(), localSendBuffer, static_cast<std::size_t>(ioBatch.len));
         task.requestLength = ioBatch.len;
         task.flagBuffer = static_cast<std::uint32_t*>(localFlagBuffer);
+        task.enqueuedAt = std::chrono::steady_clock::now();
         if (!workerPool_->Push(std::move(task))) {
             statuses.emplace_back(
                 Status::Error(StatusCode::NOT_INITIALIZED, "fake backend worker pool is stopping"));
@@ -722,6 +726,7 @@ std::vector<Status> FakeTransProvider::Send(const std::vector<SendIoBatch>& ioBa
 
 void FakeTransProvider::ProcessIoTask(IoTask& task)
 {
+    const auto processingStartedAt = std::chrono::steady_clock::now();
     std::vector<std::uint32_t> completion;
     Status status;
     try {
@@ -746,6 +751,14 @@ void FakeTransProvider::ProcessIoTask(IoTask& task)
                  status.message);
     }
     PublishCompletion(task.flagBuffer, completion);
+    const auto completionPublishedAt = std::chrono::steady_clock::now();
+    const Metrics::BuiltinMetricUpdate updates[] = {
+        {Metrics::MetricId::FakeBackendTaskQueueDuration,
+         std::chrono::duration<double>(processingStartedAt - task.enqueuedAt).count()      },
+        {Metrics::MetricId::FakeBackendTaskProcessDuration,
+         std::chrono::duration<double>(completionPublishedAt - processingStartedAt).count()},
+    };
+    Metrics::UpdateBuiltinBatch(updates, std::size(updates));
 }
 
 Status FakeTransProvider::RegisterMemory(const std::vector<RegisterMemoryDesc>& memoryDescs,
