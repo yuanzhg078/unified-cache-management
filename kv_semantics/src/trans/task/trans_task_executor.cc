@@ -28,8 +28,8 @@
 #include <iterator>
 #include <string>
 #include <utility>
-#include "kv_metrics/metrics.h"
 #include "conn/connection_internal.h"
+#include "kv_metrics/metrics.h"
 #include "logger.h"
 #include "utils/trans_task_utils.h"
 
@@ -319,24 +319,24 @@ bool TransportTaskExecutor::Execute(const TransportTaskPtr& task)
                  static_cast<int>(status.code), status.message);
     } else {
         const auto preSendAt = std::chrono::steady_clock::now();
-        const Metrics::BuiltinMetricUpdate preSendUpdates[] = {
-            {Metrics::MetricId::TransportTaskPreSendDuration,
+        const Metrics::KvMetricUpdate preSendUpdates[] = {
+            {Metrics::KvMetricId::TransportTaskPreSendDuration,
              std::chrono::duration<double>(preSendAt - task->submittedAt).count()                },
-            {Metrics::MetricId::TransportTaskQueueDuration,
+            {Metrics::KvMetricId::TransportTaskQueueDuration,
              std::chrono::duration<double>(task->processingStartedAt - task->submittedAt).count()},
-            {Metrics::MetricId::TransportTaskProcessDuration,
+            {Metrics::KvMetricId::TransportTaskProcessDuration,
              std::chrono::duration<double>(preSendAt - task->processingStartedAt).count()        },
         };
-        Metrics::UpdateBuiltinBatch(preSendUpdates, std::size(preSendUpdates));
+        Metrics::UpdateStats(preSendUpdates, std::size(preSendUpdates));
         task->NotifyPreSend();
         SendSubBatchBuffers(subBatchContexts, ioBatches);
     }
     task->sendCompletedAt = std::chrono::steady_clock::now();
     task->sendReturned.store(true, std::memory_order_release);
-    const Metrics::BuiltinMetricUpdate sendUpdate{
-        Metrics::MetricId::TransportTaskSendDuration,
+    const Metrics::KvMetricUpdate sendUpdate{
+        Metrics::KvMetricId::TransportTaskSendDuration,
         std::chrono::duration<double>(task->sendCompletedAt - task->submittedAt).count()};
-    Metrics::UpdateBuiltinBatch(&sendUpdate, 1);
+    Metrics::UpdateStats(&sendUpdate, 1);
     task->NotifySendComplete();
 
     bool done = false;

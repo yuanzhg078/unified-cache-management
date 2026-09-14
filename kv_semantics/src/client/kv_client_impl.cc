@@ -28,9 +28,9 @@
 #include <limits>
 #include <thread>
 #include <utility>
-#include "kv_metrics/metrics.h"
 #include "device.h"
 #include "event.h"
+#include "kv_metrics/metrics.h"
 #include "kv_types.h"
 #include "logger.h"
 #include "router/config.h"
@@ -44,39 +44,39 @@ namespace Metrics = kv::metrics;
 namespace {
 
 struct SubmitMetricIds {
-    Metrics::MetricId requests;
-    Metrics::MetricId entries;
-    Metrics::MetricId errors;
-    Metrics::MetricId duration;
+    Metrics::KvMetricId requests;
+    Metrics::KvMetricId entries;
+    Metrics::KvMetricId errors;
+    Metrics::KvMetricId duration;
 };
 
 bool GetSubmitMetricIds(AsuOpType opType, SubmitMetricIds& ids)
 {
-    using Metrics::MetricId;
+    using Metrics::KvMetricId;
     switch (opType) {
         case AsuOpType::QUERY:
-            ids = {MetricId::QueryRequests, MetricId::QueryEntries, MetricId::QueryErrors,
-                   MetricId::QuerySubmitDuration};
+            ids = {KvMetricId::QueryRequests, KvMetricId::QueryEntries, KvMetricId::QueryErrors,
+                   KvMetricId::QuerySubmitDuration};
             return true;
         case AsuOpType::LOAD:
-            ids = {MetricId::LoadRequests, MetricId::LoadEntries, MetricId::LoadErrors,
-                   MetricId::LoadSubmitDuration};
+            ids = {KvMetricId::LoadRequests, KvMetricId::LoadEntries, KvMetricId::LoadErrors,
+                   KvMetricId::LoadSubmitDuration};
             return true;
         case AsuOpType::STORE:
-            ids = {MetricId::StoreRequests, MetricId::StoreEntries, MetricId::StoreErrors,
-                   MetricId::StoreSubmitDuration};
+            ids = {KvMetricId::StoreRequests, KvMetricId::StoreEntries, KvMetricId::StoreErrors,
+                   KvMetricId::StoreSubmitDuration};
             return true;
         case AsuOpType::BATCH_LOAD:
-            ids = {MetricId::BatchLoadRequests, MetricId::BatchLoadEntries,
-                   MetricId::BatchLoadErrors, MetricId::BatchLoadSubmitDuration};
+            ids = {KvMetricId::BatchLoadRequests, KvMetricId::BatchLoadEntries,
+                   KvMetricId::BatchLoadErrors, KvMetricId::BatchLoadSubmitDuration};
             return true;
         case AsuOpType::BATCH_STORE:
-            ids = {MetricId::BatchStoreRequests, MetricId::BatchStoreEntries,
-                   MetricId::BatchStoreErrors, MetricId::BatchStoreSubmitDuration};
+            ids = {KvMetricId::BatchStoreRequests, KvMetricId::BatchStoreEntries,
+                   KvMetricId::BatchStoreErrors, KvMetricId::BatchStoreSubmitDuration};
             return true;
         case AsuOpType::DELETE:
-            ids = {MetricId::DeleteRequests, MetricId::DeleteEntries, MetricId::DeleteErrors,
-                   MetricId::DeleteSubmitDuration};
+            ids = {KvMetricId::DeleteRequests, KvMetricId::DeleteEntries, KvMetricId::DeleteErrors,
+                   KvMetricId::DeleteSubmitDuration};
             return true;
         default: return false;
     }
@@ -90,14 +90,14 @@ void RecordSubmit(AsuOpType opType, std::size_t entryCount, const Status& status
     if (!GetSubmitMetricIds(opType, ids)) { return; }
     const auto elapsed =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - timer.begin).count();
-    Metrics::BuiltinMetricUpdate updates[] = {
+    Metrics::KvMetricUpdate updates[] = {
         {ids.requests, 1.0                            },
         {ids.entries,  static_cast<double>(entryCount)},
         {ids.duration, elapsed                        },
         {ids.errors,   status.ok() ? 0.0 : 1.0        },
     };
     const auto count = status.ok() ? std::size(updates) - 1 : std::size(updates);
-    Metrics::UpdateBuiltinBatch(updates, count);
+    Metrics::UpdateStats(updates, count);
 }
 
 }  // namespace
@@ -321,14 +321,14 @@ Status KvClientImpl::Wait(TaskId taskId, std::uint64_t timeoutMs, TaskResult& re
     if (timer.enabled) {
         const auto elapsed =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - timer.begin).count();
-        Metrics::BuiltinMetricUpdate updates[] = {
-            {Metrics::MetricId::WaitRequests, 1.0                                          },
-            {Metrics::MetricId::WaitDuration, elapsed                                      },
-            {Metrics::MetricId::WaitErrors,   status.ok() && result.status.ok() ? 0.0 : 1.0},
+        Metrics::KvMetricUpdate updates[] = {
+            {Metrics::KvMetricId::WaitRequests, 1.0                                          },
+            {Metrics::KvMetricId::WaitDuration, elapsed                                      },
+            {Metrics::KvMetricId::WaitErrors,   status.ok() && result.status.ok() ? 0.0 : 1.0},
         };
         const auto count =
             status.ok() && result.status.ok() ? std::size(updates) - 1 : std::size(updates);
-        Metrics::UpdateBuiltinBatch(updates, count);
+        Metrics::UpdateStats(updates, count);
     }
     if (status.code == StatusCode::TASK_NOT_FOUND) { return status; }
     if (viewServer_ != nullptr &&
@@ -503,10 +503,10 @@ Status KvClientImpl::SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>& 
         }
     }
     taskQueue_.NotifyOne(workerCv_);
-    const Metrics::BuiltinMetricUpdate enqueueUpdate{
-        Metrics::MetricId::ClientTaskEnqueueDuration,
+    const Metrics::KvMetricUpdate enqueueUpdate{
+        Metrics::KvMetricId::ClientTaskEnqueueDuration,
         std::chrono::duration<double>(std::chrono::steady_clock::now() - taskStart).count()};
-    Metrics::UpdateBuiltinBatch(&enqueueUpdate, 1);
+    Metrics::UpdateStats(&enqueueUpdate, 1);
     return Status::OK();
 }
 
@@ -557,10 +557,10 @@ Status KvClientImpl::SubmitAsync(AsuOpType opType, const std::vector<CacheKey>& 
         }
     }
     taskQueue_.NotifyOne(workerCv_);
-    const Metrics::BuiltinMetricUpdate enqueueUpdate{
-        Metrics::MetricId::ClientTaskEnqueueDuration,
+    const Metrics::KvMetricUpdate enqueueUpdate{
+        Metrics::KvMetricId::ClientTaskEnqueueDuration,
         std::chrono::duration<double>(std::chrono::steady_clock::now() - taskStart).count()};
-    Metrics::UpdateBuiltinBatch(&enqueueUpdate, 1);
+    Metrics::UpdateStats(&enqueueUpdate, 1);
     return Status::OK();
 }
 
@@ -572,17 +572,17 @@ void KvClientImpl::WorkerLoop()
     auto processTask = [this, &deviceStatus](ClientTaskPtr ctx) {
         ctx->processingStartedAt = std::chrono::steady_clock::now();
         const auto queueStats = taskQueue_.TakeStats();
-        const Metrics::BuiltinMetricUpdate queueUpdates[] = {
-            {Metrics::MetricId::ClientTaskQueueDuration,
+        const Metrics::KvMetricUpdate queueUpdates[] = {
+            {Metrics::KvMetricId::ClientTaskQueueDuration,
              std::chrono::duration<double>(ctx->processingStartedAt - ctx->enqueuedAt).count()},
-            {Metrics::MetricId::ClientTaskQueueWaitNotified,
+            {Metrics::KvMetricId::ClientTaskQueueWaitNotified,
              static_cast<double>(queueStats.waitNotifiedCount)                                },
-            {Metrics::MetricId::ClientTaskQueueWaitTimeouts,
+            {Metrics::KvMetricId::ClientTaskQueueWaitTimeouts,
              static_cast<double>(queueStats.waitTimeoutCount)                                 },
-            {Metrics::MetricId::ClientTaskQueueNotifies,
+            {Metrics::KvMetricId::ClientTaskQueueNotifies,
              static_cast<double>(queueStats.notifyCount)                                      },
         };
-        Metrics::UpdateBuiltinBatch(queueUpdates, std::size(queueUpdates));
+        Metrics::UpdateStats(queueUpdates, std::size(queueUpdates));
         auto status = deviceStatus;
         if (status.ok() && ctx->prerequisiteEventHandle != 0) {
             status = runtime::SynchronizeEvent(ctx->prerequisiteEventHandle);

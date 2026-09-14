@@ -83,11 +83,11 @@ void TransportTask::TryFinalizeFromSubBatches()
 void TransportTaskManager::NotifyCompletion(const TransportTaskPtr& task)
 {
     if (task->sendReturned.load(std::memory_order_acquire)) {
-        const Metrics::BuiltinMetricUpdate update{
-            Metrics::MetricId::TransportTaskCompletionDuration,
+        const Metrics::KvMetricUpdate update{
+            Metrics::KvMetricId::TransportTaskCompletionDuration,
             std::chrono::duration<double>(std::chrono::steady_clock::now() - task->sendCompletedAt)
                 .count()};
-        Metrics::UpdateBuiltinBatch(&update, 1);
+        Metrics::UpdateStats(&update, 1);
     }
     TaskResult result;
     BuildResult(*task, result);

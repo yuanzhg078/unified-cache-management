@@ -5,23 +5,14 @@
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <string_view>
-#include <vector>
 #include "kv_metrics/metric_names.h"
 
 namespace kv::metrics {
 
 enum class MetricType { COUNTER = 0, GAUGE, HISTOGRAM };
 
-struct MetricDescriptor {
-    std::string name;
-    MetricType type{MetricType::COUNTER};
-    std::string documentation;
-    std::vector<double> buckets;
-};
-
-struct BuiltinMetricUpdate {
-    MetricId id;
+struct KvMetricUpdate {
+    KvMetricId id;
     double value;
 };
 
@@ -30,28 +21,23 @@ struct MetricTimer {
     bool enabled{false};
 };
 
-class MetricsBackend {
+class KvMetricsBackend {
 public:
-    virtual ~MetricsBackend() = default;
+    virtual ~KvMetricsBackend() = default;
 
-    virtual bool Start() = 0;
-    virtual void Update(std::string_view name, double value) noexcept = 0;
-    virtual void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates,
-                                    std::size_t count) noexcept = 0;
-    virtual void Flush() = 0;
-    virtual void Stop() = 0;
-    virtual std::string LastError() const = 0;
+    virtual void UpdateStats(KvMetricId id, double value) noexcept = 0;
+    virtual void UpdateStats(const KvMetricUpdate* updates, std::size_t count) noexcept = 0;
+    virtual void Flush() {}
+    virtual void Stop() {}
 };
 
-bool Initialize(std::shared_ptr<MetricsBackend> backend, std::string* error = nullptr);
+bool InstallBackend(std::shared_ptr<KvMetricsBackend> backend, std::string* error = nullptr);
 void Shutdown();
 void Flush();
 bool IsEnabled() noexcept;
 MetricTimer StartTimer() noexcept;
 
-void Update(std::string_view name, double value) noexcept;
-void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates, std::size_t count) noexcept;
-
-std::vector<MetricDescriptor> DefaultKvMetricDescriptors();
+void UpdateStats(KvMetricId id, double value) noexcept;
+void UpdateStats(const KvMetricUpdate* updates, std::size_t count) noexcept;
 
 }  // namespace kv::metrics

@@ -1,14 +1,12 @@
 #pragma once
 
-#include <cstddef>
 #include <memory>
-#include <vector>
 #include "kv_metrics/metrics.h"
 
 namespace kv::metrics {
 
-std::shared_ptr<MetricsBackend> CreateUcmMetricsBackend(
-    std::vector<MetricDescriptor> descriptors = DefaultKvMetricDescriptors(),
-    std::size_t histogramMaxLength = 10000);
+// Adapts KV metric updates to the process-wide UCM registry initialized by vLLM.
+// This adapter never calls UC::Metrics::SetUp or UC::Metrics::CreateStats.
+std::shared_ptr<KvMetricsBackend> CreateUcmKvMetricsAdapter();
 
 }  // namespace kv::metrics

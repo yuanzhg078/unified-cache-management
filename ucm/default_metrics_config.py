@@ -4,7 +4,7 @@
 # Copyright (c) 2025 Huawei Technologies Co., Ltd. All rights reserved.
 #
 # This file is generated from examples/metrics/metrics_configs.yaml.
-# Update the YAML first, then regenerate this file.
+# Its generated KV blocks come from kv_metrics.yaml; do not edit them here.
 #
 
 from copy import deepcopy
@@ -12,6 +12,35 @@ from typing import Any
 
 # fmt: off
 _COUNTER_METRICS = [
+    # BEGIN GENERATED KV METRICS
+    ('kv_client_query_requests_total', 'Total KV client query submissions'),
+    ('kv_client_query_entries_total', 'Total keys submitted to KV client query'),
+    ('kv_client_query_errors_total', 'Total failed KV client query submissions'),
+    ('kv_client_load_requests_total', 'Total KV client load submissions'),
+    ('kv_client_load_entries_total', 'Total entries submitted to KV client load'),
+    ('kv_client_load_errors_total', 'Total failed KV client load submissions'),
+    ('kv_client_store_requests_total', 'Total KV client store submissions'),
+    ('kv_client_store_entries_total', 'Total entries submitted to KV client store'),
+    ('kv_client_store_errors_total', 'Total failed KV client store submissions'),
+    ('kv_client_batch_load_requests_total', 'Total KV client batch-load submissions'),
+    ('kv_client_batch_load_entries_total', 'Total entries submitted to KV client batch-load'),
+    ('kv_client_batch_load_errors_total', 'Total failed KV client batch-load submissions'),
+    ('kv_client_batch_store_requests_total', 'Total KV client batch-store submissions'),
+    ('kv_client_batch_store_entries_total', 'Total entries submitted to KV client batch-store'),
+    ('kv_client_batch_store_errors_total', 'Total failed KV client batch-store submissions'),
+    ('kv_client_delete_requests_total', 'Total KV client delete submissions'),
+    ('kv_client_delete_entries_total', 'Total keys submitted to KV client delete'),
+    ('kv_client_delete_errors_total', 'Total failed KV client delete submissions'),
+    ('kv_client_wait_requests_total', 'Total KV client wait calls'),
+    ('kv_client_wait_errors_total', 'Total failed KV client wait calls'),
+    ('kv_client_task_queue_wait_notified_total', 'KV client queue waits completed by notification'),
+    ('kv_client_task_queue_wait_timeout_total', 'KV client queue waits completed by timeout'),
+    ('kv_client_task_queue_notify_total', 'KV client queue notifications'),
+    ('kv_transport_task_queue_wait_notified_total', 'KV transport queue waits completed by notification'),
+    ('kv_transport_task_queue_wait_timeout_total', 'KV transport queue waits completed by timeout'),
+    ('kv_transport_task_queue_notify_total', 'KV transport queue notifications'),
+    ('kv_metrics_exporter_http_requests_total', 'HTTP requests served by the KV metrics endpoint'),
+    # END GENERATED KV METRICS
     (
         "cache_lookup_hit_blocks_total",
         "Number of lookup hits served by the Cache stage (no descent to backend)",
@@ -350,6 +379,9 @@ _COUNTER_METRICS = [
     ),
 ]
 _GAUGE_METRICS = [
+    # BEGIN GENERATED KV METRICS
+    ('kv_metrics_exporter_up', 'Whether the KV standalone metrics exporter is running', {'multiprocess_mode': 'livemostrecent'}),
+    # END GENERATED KV METRICS
     (
         "yuanrong_dram_used_bytes",
         "YuanRong physical shared-memory usage in bytes",
@@ -448,6 +480,28 @@ _CONNECTOR_INTERFACE_DURATION_BUCKETS = [
     2000, 5000, 10000,
 ]
 _HISTOGRAM_METRICS = [
+    # BEGIN GENERATED KV METRICS
+    ('kv_client_query_submit_duration_seconds', 'KV client query submission duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_client_load_submit_duration_seconds', 'KV client load submission duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_client_store_submit_duration_seconds', 'KV client store submission duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_client_batch_load_submit_duration_seconds', 'KV client batch-load submission duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_client_batch_store_submit_duration_seconds', 'KV client batch-store submission duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_client_delete_submit_duration_seconds', 'KV client delete submission duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_client_wait_duration_seconds', 'KV client wait duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_client_task_enqueue_duration_seconds', 'KV client API-to-enqueue duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_client_task_queue_duration_seconds', 'KV client task queue duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_client_task_process_duration_seconds', 'KV client task processing duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_client_task_pre_send_duration_seconds', 'KV client duration until all transport tasks reach Send', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_client_task_send_duration_seconds', 'KV client duration until all Send calls return', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_client_task_duration_seconds', 'KV client task end-to-end duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_transport_task_pre_send_duration_seconds', 'KV transport duration before Send', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_transport_task_queue_duration_seconds', 'KV transport task queue duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_transport_task_process_duration_seconds', 'KV transport task processing duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_transport_task_send_duration_seconds', 'KV transport duration until Send returns', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_transport_task_completion_duration_seconds', 'KV transport completion callback duration after Send', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_fake_backend_task_queue_duration_seconds', 'KV fake backend task queue duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    ('kv_fake_backend_task_process_duration_seconds', 'KV fake backend processing duration', [1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0]),
+    # END GENERATED KV METRICS
     (
         "save_duration",
         "Time from UCM connector wait_for_save entry to async dump task completion (ms)",

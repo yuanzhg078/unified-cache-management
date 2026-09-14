@@ -22,12 +22,12 @@
 ┌────────────────────────────────────────────────────────────┐
 │ Instrumentation                                            │
 │ AsuClientImpl / ClientTaskManager / TransportTaskExecutor  │
-│ 只记录 MetricId + value，不感知 Prometheus、HTTP 或 vLLM    │
+│ 只记录 KvMetricId + value，不感知 Prometheus、HTTP 或 vLLM    │
 └───────────────────────────┬────────────────────────────────┘
                             │
 ┌───────────────────────────▼────────────────────────────────┐
 │ KV Metrics Facade：libkv_metrics.so                       │
-│ Initialize / Shutdown / Update / BuiltinBatch               │
+│ InstallBackend / Shutdown / UpdateStats                      │
 │ 全进程共享一个当前 backend；未启用时是低成本 no-op           │
 └───────────────────────────┬────────────────────────────────┘
                             │ 启动时二选一
@@ -52,7 +52,7 @@
 
 | 层 | 当前实现 | 职责 |
 | --- | --- | --- |
-| 指标定义 | `kv_metrics/metric_names.h` | 集中定义内置 `MetricId`、名称、类型和 HELP 文本 |
+| 指标定义 | `config/kv_metrics.yaml`、生成的 `kv_metrics/metric_names.h` | YAML 是 KV 点位真源；生成头文件提供 `KvMetricId` 和名称 |
 | facade | `kv_metrics/metrics.h`、`metrics.cc` | 隔离业务埋点与具体采集/导出实现，管理唯一 backend |
 | backend | `standalone_metrics_backend.cc`、`ucm_metrics_backend.cc` | standalone 自采集，或转发给 UCM collector |
 | exporter | standalone HTTP server，或 UCM Python logger | 输出 Prometheus exposition format |
@@ -62,22 +62,17 @@
 KV 可以作为独立 transport/client 交付，不应强制依赖 UCM、Python 或 vLLM。facade 让 KV 埋点保持不变：
 
 ```cpp
-Metrics::UpdateBuiltinBatch(updates, count);
+Metrics::UpdateStats(updates, count);
 ```
 
-字符串指标使用 `Metrics::Update(name, value)`。指标在启动时由 `MetricDescriptor` 注册，
-descriptor 的类型决定更新语义：`COUNTER` 累加、`GAUGE` 覆盖、`HISTOGRAM` 记录样本。
-这与 UCM metrics 的 `UpdateStats(name, value)` 保持一致。
-
-| facade 接口 | 适用对象 | Standalone backend | UCM adapter backend |
-| --- | --- | --- | --- |
-| `Update(name, value)` | 已注册的字符串指标 | 查 descriptor 后按类型更新线程本地 buffer | 转发为 `UC::Metrics::UpdateStats(name, value)` |
-| `UpdateBuiltinBatch(updates, count)` | `MetricId` 内置指标的高频路径 | 一次取得 thread buffer 并更新整批指标 | 按 `MetricId` 映射名称后逐项调用 `UpdateStats` |
+facade 提供统一的单点和批量接口：`UpdateStats(KvMetricId, value)` 与
+`UpdateStats(KvMetricUpdate*, count)`。Standalone 按启动时绑定的 collector slot 写入；UCM
+adapter 按同一 `KvMetricId` 取得 `UC::Metrics::CachedMetric` 并调用原生 `UpdateStats`。
 
 宿主在启动时决定数据流向：
 
-- `kv-test`：`CreateStandaloneMetricsBackend(...)`；
-- UCM `AsuStore`：`CreateUcmMetricsBackend(...)`；
+- `kv-test`：`SetUpStandaloneMetrics(...)` 完成注册、exporter 启动和 backend 安装；
+- UCM `AsuStore`：`InstallBackend(CreateUcmKvMetricsAdapter())`，只安装写入适配器；
 - metrics 未启用：不初始化 backend，所有埋点为 no-op。
 
 这种方式避免在 client/transport 中出现 `if (standalone)` 或 `if (vllm)` 分支，也避免为两种模式维护两套埋点。
@@ -92,6 +87,9 @@ backend。因此构建 `asustore` target 不会编译 standalone exporter，构�
 UCM adapter；两个宿主仍共享同一份 facade 单例。
 
 UCM 路径还要求 `kv_metrics_ucm_adapter` 与 Python `ucmmetrics` 解析到同一份 `libucm_metrics.so.1`。当前 `ucm/shared/metrics/CMakeLists.txt` 已将 collector 构建为 `SHARED`，这是 KV 指标能被 Python drain 到的前提。
+
+`libkv_metrics.so` 只包含 facade；`kv_metrics_standalone` 与
+`kv_metrics_ucm_adapter` 是两个互不链接的静态 backend。`kv-test` 链接前者，`asustore` 链接后者；target 级构建只会编译所需的 backend。
 
 可在安装包中验证：
 
@@ -112,7 +110,7 @@ ldd ./ucmmetrics*.so | grep ucm_metrics
 
 ```text
 kv-test
-  ├─ 初始化 StandaloneMetricsBackend
+  ├─ 初始化 StandaloneKvMetricsBackend
   ├─ KV client/transport 写线程本地双 buffer
   ├─ aggregation thread 定时合并为进程级累计快照
   └─ HTTP thread 从只读快照返回 /metrics
@@ -126,11 +124,11 @@ standalone backend 完全位于 KV metrics 模块内，不依赖 `UC::Metrics`�
 
 ```text
 高频业务线程
-    Metrics::UpdateBuiltinBatch(updates, count)
+    Metrics::UpdateStats(updates, count)
         │
         ├─ atomic load gBackendFast（不增加 shared_ptr 引用计数）
         ▼
-    StandaloneMetricsBackend::UpdateBuiltinBatch
+    StandaloneKvMetricsBackend::UpdateStats
         │
         ├─ TLS 命中 ThreadBuffer*（不执行 weak_ptr::lock）
         ├─ WriteGuard 进入当前 write slot
@@ -162,7 +160,7 @@ HTTP thread
 | backend 快速访问 | `gBackend` 持有对象，`gBackendFast` 供打点线程执行一次 atomic raw-pointer load | 每次 `atomic_load(shared_ptr)` 的引用计数增减及共享 cache line 修改 |
 | 线程本地 buffer | TLS 缓存 `ThreadBuffer*`；collector 的 `buffers_` 用 `shared_ptr` 持有其生命周期 | 每次 `weak_ptr::lock()` 的原子引用计数操作 |
 | 双槽写入 | 每线程一个 `ThreadBuffer`，`WriteGuard` 用 `writeIndex/activeWriteIndex` 和 aggregator 握手 | 每次打点的 slot mutex lock/unlock |
-| 内置指标批量更新 | 一次 `UpdateBuiltinBatch()` 共用 backend 查询、TLS buffer 查询和一个 `WriteGuard` | 同一业务事件逐条打点造成的重复固定开销 |
+| 内置指标批量更新 | 一次 `UpdateStats()` 共用 backend 查询、TLS buffer 查询和一个 `WriteGuard` | 同一业务事件逐条打点造成的重复固定开销 |
 | Histogram 预聚合 | 写入时直接更新 interval bucket、`sum` 和 `count` | 保存并跨线程搬运无限增长的原始样本 |
 
 `WriteGuard` 与 aggregator 的协调过程是：
@@ -192,15 +190,17 @@ sequenceDiagram
     participant P as Prometheus
 
     Main->>MR: Start(config.metrics)
-    MR->>MB: Initialize(backend)
-    MB->>MB: 加载默认 descriptor
-    MB->>MB: 用 metrics_configs.yaml 覆盖同名定义
-    MB->>MB: 校验全部内置指标存在且类型一致
+    MR->>MR: 加载 kv_metrics.yaml
+    MR->>MB: 创建 collector
+    loop 每个 descriptor
+        MB->>MB: Register(descriptor)
+    end
+    MB->>MB: 校验并绑定全部内置 KvMetricId
     MB->>Agg: StartAggregation(interval)
     MB->>HTTP: Listen(address:port)
     Main->>KV: Init() + RunCommand()
     loop 业务线程
-        KV->>MB: UpdateBuiltinBatch(...)
+        KV->>MB: UpdateStats(...)
     end
     loop 每 aggregation_interval_ms
         Agg->>Agg: 切换并 drain 线程 buffer
@@ -231,11 +231,11 @@ sequenceDiagram
 
 ### 3.4 Standalone 配置
 
-`asu_kv_test.conf` 控制 exporter 生命周期和固定标签：
+`kv_test.conf` 控制 exporter 生命周期和固定标签：
 
 ```ini
 metrics.enabled=true
-metrics.config_path=./examples/metrics/metrics_configs.yaml
+metrics.config_path=./kv_semantics/metrics/config/kv_metrics.yaml
 metrics.listen_address=127.0.0.1
 metrics.port=9108
 metrics.path=/metrics
@@ -246,7 +246,7 @@ metrics.aggregation_interval_ms=500
 metrics.shutdown_grace_ms=15000
 ```
 
-`metrics_configs.yaml` 是公共 exporter 定义，提供 `metric_prefix`、指标类型、HELP 文本和 Histogram buckets。standalone 会先注册编译期内置指标，再用 YAML 中的同名项覆盖文档和 buckets；YAML 未列出的内置指标继续使用编译期默认值，但把同名内置指标改成另一种类型会启动失败。为了和 UCM exporter 保持完全一致，公共 YAML 仍应列出全部 KV 内置指标。
+`kv_metrics.yaml` 是 KV 点位生成真源和 standalone 注册清单，提供稳定 `id`、基础名、类型、HELP 文本和 Histogram buckets。生成脚本据此更新编译期 `metric_names.h`、UCM YAML 中的 KV 区域和 Python default。指定该文件后，standalone 注册 YAML 点位并绑定全部内置 `KvMetricId`；没有配置路径时退回生成头文件提供的编译期 descriptor。
 
 ### 3.5 短生命周期命令
 
@@ -341,14 +341,14 @@ sequenceDiagram
     participant E as vLLM /metrics
     participant P as Prometheus
 
-    V->>S: Setup()
-    S->>F: Initialize(CreateUcmMetricsBackend)
-    F->>A: Start()
-    A->>C: SetUp() + CreateStats(descriptors)
+    V->>C: SetUp() + CreateStats(UCM YAML)
+    V->>S: 创建并加载 AsuStore
+    S->>F: InstallBackend(CreateUcmKvMetricsAdapter)
+    A->>A: 按生成名称表创建 CachedMetric 数组
     V->>S: Lookup/Load/Dump
     S->>F: KV client/transport 埋点
-    F->>A: UpdateBuiltinBatch
-    A->>C: UpdateStats(name, value)
+    F->>A: UpdateStats(KvMetricId/value)
+    A->>C: UpdateStats(CachedMetric, value)
     loop log_interval
         L->>C: GetAllStatsAndClear()
         C-->>L: counter/gauge/histogram delta
@@ -360,7 +360,7 @@ sequenceDiagram
     S->>F: Shutdown owned backend
 ```
 
-`AsuStore` 对 adapter 使用引用计数：第一个实例在 facade 尚未启用时初始化 backend，最后一个由它拥有的实例释放时关闭。它不会覆盖宿主已经初始化的 backend。
+`AsuStore` 对 adapter 使用引用计数：第一个实例在 facade 尚未启用时安装 backend，最后一个由它拥有的实例释放时关闭 facade。adapter 不调用 `UC::Metrics::SetUp/CreateStats`，也不关闭进程级 UCM metrics；点位已由 vLLM 在加载 AsuStore 前注册。
 
 ### 5.2 为什么 UCM 路径仍使用 `GetAllStatsAndClear`
 
@@ -379,10 +379,10 @@ KV standalone backend 不读取 `UC::Metrics`，但 facade 本身也只允许一
 
 | 维度 | 兼容要求 | 当前来源 |
 | --- | --- | --- |
-| 指标基础名 | 完全一致 | `KV_BUILTIN_METRIC_LIST` |
-| 指标类型 | Counter/Gauge/Histogram 不可漂移 | 编译期 descriptor + YAML 启动校验 |
+| 指标基础名 | 完全一致 | standalone YAML 生成并同步 |
+| 指标类型 | Counter/Gauge/Histogram 不可漂移 | standalone YAML 生成并同步 |
 | 单位 | duration 使用 seconds；数量使用 count | 指标名与 HELP 文本 |
-| Histogram buckets | 两种 exporter 使用相同 YAML buckets | `metrics_configs.yaml` |
+| Histogram buckets | 两种 exporter 使用相同 buckets | 两份 YAML 的 KV 条目 |
 | HELP 文本 | 含义和计数口径一致 | descriptor/YAML |
 | 公共前缀 | 默认 `ucm:` | `metric_prefix` |
 | 稳定标签 | 至少对齐 `model_name`、`worker_id` | 两种 exporter 启动配置 |
@@ -413,19 +413,14 @@ model_name="...", worker_id="..."
 
 ### 6.3 单一指标清单
 
-standalone 的指标定义只来自两处：`metric_names.h` 提供编译期内置指标，
-`metrics_configs.yaml` 在启动期覆盖内置定义或新增字符串指标。两类指标的接入方式不同：
-
-1. 高频、需要 `UpdateBuiltinBatch()` 的内置指标：在 `KV_BUILTIN_METRIC_LIST` 增加 ID、基础名、类型和说明；如需统一 HELP 或 Histogram buckets，再在 YAML 增加同名定义。
-2. 仅在启动前确定的低频自定义指标：只在 `metrics_configs.yaml` 新增定义，业务侧通过 `Update(name, value)` 写入；它没有编译期 `MetricId`，不能传给 `UpdateBuiltinBatch()`。
-3. standalone 单测验证 YAML 类型校验和 exposition；UCM 测试验证 `UC::Metrics` 可 drain 到需要在 UCM 模式暴露的指标；dashboard 查询只使用两种模式共有的名称、单位和标签。
+`config/kv_metrics.yaml` 是 KV 点位真源。新增固定点位时增加 `id/name/documentation` 和必要的 buckets，然后执行 `generate_kv_metrics.py`；脚本生成 `metric_names.h`、同步 UCM YAML 的 KV 区域，并更新 `default_metrics_config.py`。业务代码只引用生成的 `KvMetricId`。`--check` 可用于 CI 检查三份派生产物是否最新。
 
 ## 7. 模式对比与选择
 
 | 项目 | Standalone | UCM/vLLM |
 | --- | --- | --- |
 | 宿主 | `kv-test` 或纯 C++ KV 进程 | UCM `AsuStore` / vLLM worker |
-| backend | `StandaloneMetricsBackend` | `UcmMetricsBackend` adapter |
+| backend | `StandaloneKvMetricsBackend` | `UcmKvMetricsAdapter` adapter |
 | collector | KV 自带线程 buffer + 累计快照 | `libucm_metrics.so` 双 buffer |
 | exporter | KV 内置 HTTP server | Python `PrometheusStatsLogger` + vLLM endpoint |
 | endpoint | 独立 `:<port>/metrics` | vLLM `:<port>/metrics` |
@@ -444,8 +439,8 @@ standalone 的指标定义只来自两处：`metric_names.h` 提供编译期内�
 ### 8.1 Standalone
 
 ```bash
-./kv-test bench store --configpath ./kv_semantics/kv_test/asu_kv_test.conf
-curl -s http://127.0.0.1:9108/metrics | grep '^ucm:asu_'
+./kv-test bench store --configpath ./kv_semantics/kv_test/kv_test.conf
+curl -s http://127.0.0.1:9108/metrics | grep '^ucm:kv_'
 ```
 
 至少检查：Counter 单调递增、Histogram `_count/_sum/_bucket` 合法、并发 scrape 不改变数值、final flush 后仍能看到完成指标。
@@ -455,12 +450,12 @@ standalone collector 还必须通过“业务线程持续批量写入，同时�
 ### 8.2 UCM/vLLM
 
 ```bash
-curl -s http://127.0.0.1:8000/metrics | grep '^ucm:asu_'
+curl -s http://127.0.0.1:8000/metrics | grep '^ucm:kv_'
 ```
 
 如果 KV 代码有埋点但 endpoint 为空，按顺序检查：
 
-1. `AsuStore` 是否在 `BUILD_UCM_KV=ON` 的构建中生成；该构建固定包含 UCM metrics adapter；
+1. `AsuStore` 是否在 `BUILD_UCM_ASU=ON` 的构建中生成；该构建固定包含 UCM metrics adapter；
 2. `libasustore.so` 与 `ucmmetrics.so` 是否加载同一份 `libucm_metrics.so.1`；
 3. `metrics_configs.yaml` 是否存在完全同名且同类型的定义；
 4. `PrometheusStatsLogger` 是否启动并已经过至少一个 `log_interval`；
@@ -479,5 +474,6 @@ curl -s http://127.0.0.1:8000/metrics | grep '^ucm:asu_'
 | kv-test metrics 生命周期 | `kv_semantics/kv_test/src/kv_test_app.cc` |
 | kv-test 配置解析 | `kv_semantics/kv_test/src/kv_test_config_loader.cc` |
 | UCM adapter 所有权 | `ucm/store/asu/cc/asu_store.cc` |
-| 公共 exporter 配置 | `examples/metrics/metrics_configs.yaml` |
-| standalone dashboard | `examples/metrics/grafana_asu_client.json` |
+| KV 点位源配置 | `kv_semantics/metrics/config/kv_metrics.yaml` |
+| UCM exporter 配置 | `examples/metrics/metrics_configs.yaml` |
+| standalone dashboard | `examples/metrics/grafana_kv_client.json` |

@@ -752,13 +752,13 @@ void FakeTransProvider::ProcessIoTask(IoTask& task)
     }
     PublishCompletion(task.flagBuffer, completion);
     const auto completionPublishedAt = std::chrono::steady_clock::now();
-    const Metrics::BuiltinMetricUpdate updates[] = {
-        {Metrics::MetricId::FakeBackendTaskQueueDuration,
+    const Metrics::KvMetricUpdate updates[] = {
+        {Metrics::KvMetricId::FakeBackendTaskQueueDuration,
          std::chrono::duration<double>(processingStartedAt - task.enqueuedAt).count()      },
-        {Metrics::MetricId::FakeBackendTaskProcessDuration,
+        {Metrics::KvMetricId::FakeBackendTaskProcessDuration,
          std::chrono::duration<double>(completionPublishedAt - processingStartedAt).count()},
     };
-    Metrics::UpdateBuiltinBatch(updates, std::size(updates));
+    Metrics::UpdateStats(updates, std::size(updates));
 }
 
 Status FakeTransProvider::RegisterMemory(const std::vector<RegisterMemoryDesc>& memoryDescs,

@@ -35,9 +35,9 @@
 #include <stdexcept>
 #include <string>
 #include <utility>
+#include "kv_client.h"
 #include "kv_metrics/metrics.h"
 #include "kv_metrics/ucm_metrics_backend.h"
-#include "kv_client.h"
 #include "logger/logger.h"
 #include "ucmstore_v1.h"
 
@@ -56,8 +56,8 @@ bool AcquireMetricsBackend()
     std::lock_guard<std::mutex> lock{gMetricsBackendMutex};
     if (gMetricsBackendUsers == 0 && !kv::metrics::IsEnabled()) {
         std::string error;
-        if (!kv::metrics::Initialize(kv::metrics::CreateUcmMetricsBackend(), &error)) {
-            UC_WARN("Failed to initialize ASU UCM metrics adapter: {}.", error);
+        if (!kv::metrics::InstallBackend(kv::metrics::CreateUcmKvMetricsAdapter(), &error)) {
+            UC_WARN("Failed to install ASU UCM metrics adapter: {}.", error);
             return false;
         }
         gOwnsMetricsBackend = true;
@@ -497,8 +497,7 @@ private:
         inConfig.Get("kv_fake_backend_path", config.fakeBackendPath);
         inConfig.GetNumber("kv_fake_backend_latency_ms", config.fakeBackendLatencyMs);
         inConfig.GetNumber("kv_fake_backend_worker_threads", config.fakeBackendWorkerThreads);
-        inConfig.Get("kv_fake_backend_complete_immediately",
-                     config.fakeBackendCompleteImmediately);
+        inConfig.Get("kv_fake_backend_complete_immediately", config.fakeBackendCompleteImmediately);
         inConfig.GetNumber("asu_shared_provider", config.sharedProviderMode);
         inConfig.Get("asu_sc", config.sc);
         ReadClientAttr(inConfig, "asu_router_type", "hash_table.type", config);
@@ -630,8 +629,7 @@ private:
         }
         if (config.transProviderType == kv::TransProviderType::FAKE &&
             config.fakeBackendWorkerThreads == 0) {
-            return Status::InvalidParam(
-                "kv_fake_backend_worker_threads must be greater than zero");
+            return Status::InvalidParam("kv_fake_backend_worker_threads must be greater than zero");
         }
         if (config.clientMaxInflightTasks > std::numeric_limits<std::uint32_t>::max()) {
             return Status::InvalidParam("kv_client_max_inflight_tasks exceeds uint32 range");

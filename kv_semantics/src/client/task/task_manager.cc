@@ -26,8 +26,8 @@
 #include <chrono>
 #include <string>
 #include <utility>
-#include "kv_metrics/metrics.h"
 #include "kv_client_impl.h"
+#include "kv_metrics/metrics.h"
 #include "logger.h"
 #include "router/router.h"
 
@@ -89,9 +89,9 @@ void RecordClientTaskCompletion(ClientTask& task)
         task.enqueuedAt == std::chrono::steady_clock::time_point{}) {
         return;
     }
-    const Metrics::BuiltinMetricUpdate update{Metrics::MetricId::ClientTaskDuration,
-                                              SecondsSince(task.submittedAt)};
-    Metrics::UpdateBuiltinBatch(&update, 1);
+    const Metrics::KvMetricUpdate update{Metrics::KvMetricId::ClientTaskDuration,
+                                         SecondsSince(task.submittedAt)};
+    Metrics::UpdateStats(&update, 1);
 }
 
 }  // namespace
@@ -152,9 +152,9 @@ Status ClientTaskManager::Process(const ClientTaskPtr& task)
     }
     const auto dispatchStatus = DispatchTask(task);
     if (dispatchStatus.ok()) {
-        const Metrics::BuiltinMetricUpdate update{Metrics::MetricId::ClientTaskProcessDuration,
-                                                  SecondsSince(task->processingStartedAt)};
-        Metrics::UpdateBuiltinBatch(&update, 1);
+        const Metrics::KvMetricUpdate update{Metrics::KvMetricId::ClientTaskProcessDuration,
+                                             SecondsSince(task->processingStartedAt)};
+        Metrics::UpdateStats(&update, 1);
     }
     return dispatchStatus;
 }
@@ -340,18 +340,18 @@ Status ClientTaskManager::DispatchTask(const ClientTaskPtr& task)
             auto task = clientTask.lock();
             if (!task) { return; }
             if (task->remainingTransportPreSendTasks.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                const Metrics::BuiltinMetricUpdate update{
-                    Metrics::MetricId::ClientTaskPreSendDuration, SecondsSince(task->submittedAt)};
-                Metrics::UpdateBuiltinBatch(&update, 1);
+                const Metrics::KvMetricUpdate update{Metrics::KvMetricId::ClientTaskPreSendDuration,
+                                                     SecondsSince(task->submittedAt)};
+                Metrics::UpdateStats(&update, 1);
             }
         };
         transportTask->onSendComplete = [clientTask] {
             auto task = clientTask.lock();
             if (!task) { return; }
             if (task->remainingTransportSendTasks.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-                const Metrics::BuiltinMetricUpdate update{Metrics::MetricId::ClientTaskSendDuration,
-                                                          SecondsSince(task->submittedAt)};
-                Metrics::UpdateBuiltinBatch(&update, 1);
+                const Metrics::KvMetricUpdate update{Metrics::KvMetricId::ClientTaskSendDuration,
+                                                     SecondsSince(task->submittedAt)};
+                Metrics::UpdateStats(&update, 1);
             }
         };
         transportTask->opType = task->opType;

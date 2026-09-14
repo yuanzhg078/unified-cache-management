@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include "kv_metrics/default_metric_descriptors.h"
 #include "kv_metrics/metrics.h"
 
 namespace kv::metrics {
@@ -18,6 +19,6 @@ struct StandaloneMetricsConfig {
     std::map<std::string, std::string> constantLabels;
 };
 
-std::shared_ptr<MetricsBackend> CreateStandaloneMetricsBackend(StandaloneMetricsConfig config);
+bool SetUpStandaloneMetrics(StandaloneMetricsConfig config, std::string* error = nullptr);
 
 }  // namespace kv::metrics

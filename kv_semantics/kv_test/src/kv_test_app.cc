@@ -42,8 +42,7 @@ public:
             {"worker_id",  config.workerId },
         };
         std::string error;
-        auto backend = kv::metrics::CreateStandaloneMetricsBackend(std::move(backendConfig));
-        if (!kv::metrics::Initialize(std::move(backend), &error)) {
+        if (!kv::metrics::SetUpStandaloneMetrics(std::move(backendConfig), &error)) {
             return Status::Error(kExitInvalidArgument,
                                  "failed to start KV metrics exporter: " + error);
         }

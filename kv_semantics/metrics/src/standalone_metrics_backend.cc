@@ -94,6 +94,77 @@ bool ParseBuckets(const std::string& value, std::vector<double>& buckets)
     return true;
 }
 
+bool SplitInlineMapping(const std::string& value,
+                        std::unordered_map<std::string, std::string>& fields)
+{
+    auto text = Trim(value);
+    if (text.size() < 2 || text.front() != '{' || text.back() != '}') { return false; }
+    text = text.substr(1, text.size() - 2);
+
+    std::vector<std::string> entries;
+    std::size_t begin = 0;
+    std::size_t bracketDepth = 0;
+    bool inSingleQuote = false;
+    bool inDoubleQuote = false;
+    for (std::size_t index = 0; index <= text.size(); ++index) {
+        const char ch = index == text.size() ? ',' : text[index];
+        if (ch == '\'' && !inDoubleQuote) { inSingleQuote = !inSingleQuote; }
+        if (ch == '"' && !inSingleQuote) { inDoubleQuote = !inDoubleQuote; }
+        if (!inSingleQuote && !inDoubleQuote) {
+            if (ch == '[') {
+                ++bracketDepth;
+            } else if (ch == ']') {
+                if (bracketDepth == 0) { return false; }
+                --bracketDepth;
+            } else if (ch == ',' && bracketDepth == 0) {
+                entries.emplace_back(text.substr(begin, index - begin));
+                begin = index + 1;
+            }
+        }
+    }
+    if (inSingleQuote || inDoubleQuote || bracketDepth != 0) { return false; }
+
+    for (const auto& entry : entries) {
+        const auto separator = entry.find(':');
+        if (separator == std::string::npos) { return false; }
+        const auto key = Trim(entry.substr(0, separator));
+        if (key.empty() || !fields.emplace(key, Trim(entry.substr(separator + 1))).second) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ParseInlineDescriptor(const std::string& value, MetricType type,
+                           std::vector<MetricDescriptor>& descriptors, std::string& error,
+                           const std::string& path, std::size_t lineNumber)
+{
+    std::unordered_map<std::string, std::string> fields;
+    if (!SplitInlineMapping(value, fields)) {
+        error = "invalid inline metric definition at " + path + ":" + std::to_string(lineNumber);
+        return false;
+    }
+    const auto name = fields.find("name");
+    if (name == fields.end() || Unquote(name->second).empty()) {
+        error = "metric definition has no name at " + path + ":" + std::to_string(lineNumber);
+        return false;
+    }
+
+    MetricDescriptor descriptor;
+    descriptor.name = Unquote(name->second);
+    descriptor.type = type;
+    if (const auto documentation = fields.find("documentation"); documentation != fields.end()) {
+        descriptor.documentation = Unquote(documentation->second);
+    }
+    if (const auto buckets = fields.find("buckets");
+        buckets != fields.end() && !ParseBuckets(buckets->second, descriptor.buckets)) {
+        error = "invalid histogram buckets at " + path + ":" + std::to_string(lineNumber);
+        return false;
+    }
+    descriptors.emplace_back(std::move(descriptor));
+    return true;
+}
+
 bool IsValidMetricName(const std::string& name)
 {
     if (name.empty()) { return false; }
@@ -147,14 +218,14 @@ const char* PrometheusTypeName(MetricType type)
     }
 }
 
-MetricType BuiltinMetricType(MetricId id)
+MetricType BuiltinMetricType(KvMetricId id)
 {
     switch (id) {
 #define KV_BUILTIN_METRIC_TYPE_CASE(metricId, name, type, documentation) \
-    case MetricId::metricId: return MetricType::type;
+    case KvMetricId::metricId: return MetricType::type;
         KV_BUILTIN_METRIC_LIST(KV_BUILTIN_METRIC_TYPE_CASE)
 #undef KV_BUILTIN_METRIC_TYPE_CASE
-        case MetricId::COUNT: break;
+        case KvMetricId::COUNT: break;
     }
     return MetricType::COUNTER;
 }
@@ -197,6 +268,14 @@ bool LoadYamlDefinitions(const std::string& path, std::string& metricPrefix,
         }
         if (!inMetricSection) { continue; }
 
+        if (content.rfind("- {", 0) == 0) {
+            current = nullptr;
+            if (!ParseInlineDescriptor(content.substr(2), sectionType, descriptors, error, path,
+                                       lineNumber)) {
+                return false;
+            }
+            continue;
+        }
         if (content.rfind("- name:", 0) == 0) {
             MetricDescriptor descriptor;
             descriptor.name = Unquote(content.substr(std::strlen("- name:")));
@@ -204,6 +283,10 @@ bool LoadYamlDefinitions(const std::string& path, std::string& metricPrefix,
             descriptors.emplace_back(std::move(descriptor));
             current = &descriptors.back();
             continue;
+        }
+        if (content.front() == '-') {
+            error = "invalid metric definition at " + path + ":" + std::to_string(lineNumber);
+            return false;
         }
         if (current == nullptr) { continue; }
         if (content.rfind("documentation:", 0) == 0) {
@@ -259,16 +342,16 @@ public:
     {
         for (std::size_t index = 0; index < kBuiltinMetricCount; ++index) {
             const auto iter =
-                metricIds_.find(std::string{MetricName(static_cast<MetricId>(index))});
+                metricIds_.find(std::string{MetricName(static_cast<KvMetricId>(index))});
             if (iter == metricIds_.end()) {
                 error = "missing built-in metric: " +
-                        std::string{MetricName(static_cast<MetricId>(index))};
+                        std::string{MetricName(static_cast<KvMetricId>(index))};
                 return false;
             }
             if (descriptors_[iter->second].type !=
-                BuiltinMetricType(static_cast<MetricId>(index))) {
+                BuiltinMetricType(static_cast<KvMetricId>(index))) {
                 error = "built-in metric type cannot be overridden: " +
-                        std::string{MetricName(static_cast<MetricId>(index))};
+                        std::string{MetricName(static_cast<KvMetricId>(index))};
                 return false;
             }
             builtinMetricIds_[index] = iter->second;
@@ -290,17 +373,7 @@ public:
         Aggregate();
     }
 
-    void Update(std::string_view name, double value) noexcept
-    {
-        if (!std::isfinite(value)) { return; }
-        std::size_t id = 0;
-        if (!FindMetric(name, id)) { return; }
-        auto buffer = GetThreadBuffer();
-        ThreadBuffer::WriteGuard guard{*buffer};
-        ApplyUpdate(buffer->slots[guard.Index()].metrics[id], id, value);
-    }
-
-    void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates, std::size_t count) noexcept
+    void UpdateStats(const KvMetricUpdate* updates, std::size_t count) noexcept
     {
         if (updates == nullptr || count == 0) { return; }
         auto buffer = GetThreadBuffer();
@@ -732,8 +805,8 @@ private:
             contentType = "text/plain; charset=utf-8";
             body = "method not allowed\n";
         } else if (path == config_.metricsPath) {
-            const BuiltinMetricUpdate update{MetricId::ExporterHttpRequests, 1.0};
-            registry_.UpdateBuiltinBatch(&update, 1);
+            const KvMetricUpdate update{KvMetricId::ExporterHttpRequests, 1.0};
+            registry_.UpdateStats(&update, 1);
             status = "200 OK";
             contentType = "text/plain; version=0.0.4; charset=utf-8";
             body = registry_.Render(config_.metricPrefix, config_.constantLabels);
@@ -765,43 +838,27 @@ private:
     std::thread worker_;
 };
 
-class StandaloneMetricsBackend final : public MetricsBackend {
+class StandaloneKvMetricsBackend final : public KvMetricsBackend {
 public:
-    explicit StandaloneMetricsBackend(StandaloneMetricsConfig config) : config_(std::move(config))
+    explicit StandaloneKvMetricsBackend(StandaloneMetricsConfig config) : config_(std::move(config))
     {
     }
 
-    bool Start() override
+    bool Initialize(const std::vector<MetricDescriptor>& descriptors)
     {
-        std::map<std::string, MetricDescriptor> descriptors;
-        for (auto& descriptor : DefaultKvMetricDescriptors()) {
-            descriptors[descriptor.name] = std::move(descriptor);
-        }
-
-        if (!config_.definitionPath.empty()) {
-            std::vector<MetricDescriptor> configured;
-            if (!LoadYamlDefinitions(config_.definitionPath, config_.metricPrefix, configured,
-                                     error_)) {
-                return false;
-            }
-            for (auto& descriptor : configured) {
-                descriptors[descriptor.name] = std::move(descriptor);
-            }
-        }
         if (config_.metricsPath.empty() || config_.metricsPath.front() != '/') {
             error_ = "metrics path must start with '/'";
             return false;
         }
-
         collector_ = std::make_unique<ThreadBufferedMetricsCollector>();
-        for (const auto& item : descriptors) {
-            if (!collector_->Register(item.second, error_)) {
-                collector_.reset();
+        for (const auto& descriptor : descriptors) {
+            if (!collector_->Register(descriptor, error_)) {
+                Stop();
                 return false;
             }
         }
         if (!collector_->BindBuiltinMetricIds(error_)) {
-            collector_.reset();
+            Stop();
             return false;
         }
         collector_->SetGaugeDirect(Names::ExporterUp, 1.0);
@@ -816,13 +873,14 @@ public:
         return true;
     }
 
-    void Update(std::string_view name, double value) noexcept override
+    void UpdateStats(KvMetricId id, double value) noexcept override
     {
-        if (collector_) { collector_->Update(name, value); }
+        const KvMetricUpdate update{id, value};
+        UpdateStats(&update, 1);
     }
-    void UpdateBuiltinBatch(const BuiltinMetricUpdate* updates, std::size_t count) noexcept override
+    void UpdateStats(const KvMetricUpdate* updates, std::size_t count) noexcept override
     {
-        if (collector_) { collector_->UpdateBuiltinBatch(updates, count); }
+        if (collector_) { collector_->UpdateStats(updates, count); }
     }
     void Flush() override
     {
@@ -840,7 +898,7 @@ public:
             collector_.reset();
         }
     }
-    std::string LastError() const override { return error_; }
+    const std::string& LastError() const noexcept { return error_; }
 
 private:
     StandaloneMetricsConfig config_;
@@ -851,9 +909,29 @@ private:
 
 }  // namespace
 
-std::shared_ptr<MetricsBackend> CreateStandaloneMetricsBackend(StandaloneMetricsConfig config)
+bool SetUpStandaloneMetrics(StandaloneMetricsConfig config, std::string* error)
 {
-    return std::make_shared<StandaloneMetricsBackend>(std::move(config));
+    std::vector<MetricDescriptor> descriptors;
+    if (!config.definitionPath.empty()) {
+        std::string loadError;
+        if (!LoadYamlDefinitions(config.definitionPath, config.metricPrefix, descriptors,
+                                 loadError)) {
+            if (error != nullptr) { *error = std::move(loadError); }
+            return false;
+        }
+    } else {
+        descriptors = DefaultKvMetricDescriptors();
+    }
+    auto backend = std::make_shared<StandaloneKvMetricsBackend>(std::move(config));
+    if (!backend->Initialize(descriptors)) {
+        if (error != nullptr) { *error = backend->LastError(); }
+        return false;
+    }
+    if (!InstallBackend(backend, error)) {
+        backend->Stop();
+        return false;
+    }
+    return true;
 }
 
 }  // namespace kv::metrics

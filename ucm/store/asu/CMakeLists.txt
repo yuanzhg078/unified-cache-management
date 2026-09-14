@@ -5,6 +5,7 @@ file(GLOB_RECURSE UCM_ASU_STORE_CC_SOURCE_FILES "./cc/*.cc")
 add_library(kv_metrics_ucm_adapter STATIC
     ${UCM_ROOT_DIR}/kv_semantics/metrics/src/ucm_metrics_backend.cc
 )
+add_dependencies(kv_metrics_ucm_adapter kv_metrics_ucm_codegen)
 target_include_directories(kv_metrics_ucm_adapter PUBLIC
     ${UCM_ROOT_DIR}/kv_semantics/metrics/include
 )
