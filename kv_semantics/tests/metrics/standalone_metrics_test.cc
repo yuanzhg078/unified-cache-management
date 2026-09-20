@@ -293,12 +293,16 @@ TEST(StandaloneMetricsTest, ExposesKvTestCoreBuiltInMetrics)
     std::string error;
     ASSERT_TRUE(SetUpStandaloneMetrics(config, &error)) << error;
     const MetricUpdate updates[] = {
-        {KV_METRIC("kv_client_store_requests_total"),                1.0  },
-        {KV_METRIC("kv_client_store_entries_total"),                 8.0  },
-        {KV_METRIC("kv_client_wait_errors_total"),                   1.0  },
-        {KV_METRIC("kv_client_task_e2e_duration_seconds"),           0.002},
-        {KV_METRIC("kv_transport_task_completion_duration_seconds"), 0.001},
-        {KV_METRIC("kv_transport_task_e2e_duration_seconds"),        0.002},
+        {KV_METRIC("kv_client_store_requests_total"),                         1.0   },
+        {KV_METRIC("kv_client_store_entries_total"),                          8.0   },
+        {KV_METRIC("kv_client_wait_errors_total"),                            1.0   },
+        {KV_METRIC("kv_client_task_e2e_duration_seconds"),                    0.002 },
+        {KV_METRIC("kv_transport_task_completion_duration_seconds"),          0.001 },
+        {KV_METRIC("kv_transport_task_response_wait_duration_seconds"),       0.0008},
+        {KV_METRIC("kv_transport_task_completion_finalize_duration_seconds"), 0.0002},
+        {KV_METRIC("kv_fake_backend_task_queue_duration_seconds"),            0.0003},
+        {KV_METRIC("kv_fake_backend_task_process_duration_seconds"),          0.0010},
+        {KV_METRIC("kv_transport_task_e2e_duration_seconds"),                 0.002 },
     };
     UpdateStats(updates, std::size(updates));
     Flush();
@@ -309,6 +313,14 @@ TEST(StandaloneMetricsTest, ExposesKvTestCoreBuiltInMetrics)
     EXPECT_NE(response.find("kv:kv_client_wait_errors_total 1"), std::string::npos);
     EXPECT_NE(response.find("kv:kv_client_task_e2e_duration_seconds_count 1"), std::string::npos);
     EXPECT_NE(response.find("kv:kv_transport_task_completion_duration_seconds_count 1"),
+              std::string::npos);
+    EXPECT_NE(response.find("kv:kv_transport_task_response_wait_duration_seconds_count 1"),
+              std::string::npos);
+    EXPECT_NE(response.find("kv:kv_transport_task_completion_finalize_duration_seconds_count 1"),
+              std::string::npos);
+    EXPECT_NE(response.find("kv:kv_fake_backend_task_queue_duration_seconds_count 1"),
+              std::string::npos);
+    EXPECT_NE(response.find("kv:kv_fake_backend_task_process_duration_seconds_count 1"),
               std::string::npos);
     EXPECT_NE(response.find("kv:kv_transport_task_e2e_duration_seconds_count 1"),
               std::string::npos);

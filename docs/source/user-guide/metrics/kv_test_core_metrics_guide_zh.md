@@ -19,7 +19,7 @@ examples/metrics/grafana_kv_client.json
 3. 时延主要消耗在 client、transport、Send 还是 completion？
 4. 当前图上的平均值和分位数是否确实有样本？
 
-必要集合共引用 32 个通用指标：20 个请求/entry/error Counter 和 12 个时延 Histogram。
+必要集合共引用 36 个指标：20 个请求/entry/error Counter 和 16 个时延 Histogram。其中 4 个 Histogram 专用于 Fake provider 与 completion 后半段的细分定位。
 
 ## 2. 请求量、吞吐与错误
 
@@ -258,6 +258,32 @@ TransportTask 在 Send 返回后，还需要多久才能确认完成
 
 其中包含后端异步处理、CQE 等待、poll 调度和 CQE 处理，不是单次 `Poll()` 函数的纯 CPU 执行时间，也不包含 Send 返回前的 queue/process/Send 同步调用时间。
 
+代码上的完成路径依次是：
+
+1. `SendSubBatchBuffers()` 返回，记录 `sendCompletedAt`；
+2. completion worker 在 `CompletionLoop()` 中扫描 INFLIGHT task，并调用 `TransportTaskExecutor::Poll()`；
+3. 对每个尚未完成的 sub-batch，读取 `flagBuffer` 并通过 `PollResponseCid()` 判断 CQE/响应是否就绪；未就绪时本轮直接跳过，等待下一轮 poll；
+4. 响应就绪后校验 CID，`UnpackResponse()` 解包，转换响应状态并填写每个 entry 的状态；
+5. 汇报 connection 成功/失败，释放 send buffer、flag buffer 和 channel inflight 引用，并将该 sub-batch 标记完成；
+6. 最后一个 sub-batch 完成后聚合 TransportTask 状态，进入 `TransportTaskManager::NotifyCompletion()`，记录 completion 时延并触发 client 回调。
+
+Dashboard 的 `④ Send-return Completion Analysis` 将总 completion 时延单独展示为 Average 和 P99：
+
+- Average 与 P99 都升高：后端响应等待、CQE 可见性或 completion worker 整体处理能力可能不足；
+- 只有 P99 升高：更像偶发慢响应、completion worker 被调度延迟，或某个 sub-batch 成为长尾；
+- completion 正常但 TransportTask E2E 高：问题在 Send 返回以前，应回到 transport queue/process/Send 指标。
+
+为定位这条后半段，Dashboard 还展示四个细分 Histogram：
+
+| 指标 | 起点 → 终点 | 用途 |
+|---|---|---|
+| `kv:kv_fake_backend_task_queue_duration_seconds` | Fake `Send()` 入 worker queue → fake worker 开始处理 | Fake worker 线程不足或积压 |
+| `kv:kv_fake_backend_task_process_duration_seconds` | fake worker 开始处理 → `PublishCompletion()` 写入 flag buffer | `fake_backend.latency_us`、模拟后端操作和响应发布耗时 |
+| `kv:kv_transport_task_response_wait_duration_seconds` | transport `Send()` 返回 → completion worker 观察到最后一个有效响应 | 后端/Fake 处理、响应可见性和 completion poll 等待的合计 |
+| `kv:kv_transport_task_completion_finalize_duration_seconds` | 观察到最后一个有效响应 → TransportTask finalize | 响应解包、entry 状态写入、连接状态处理、资源释放和聚合 |
+
+前两条只在 Fake provider 下产生样本。`response_wait` 不能再严格拆成“Fake 已发布但尚未被 poll 到”的精确时长，因为 Fake provider 与 transport worker 之间没有共享的响应发布时间戳；但结合 Fake queue/process 与 `response_wait`，可以定位慢主要在 Fake 侧还是 completion worker 侧。超时、Send 前失败或没有观察到有效响应的 task 不记录后两条细分时延。
+
 它不是 TransportTask 的完整端到端时延。单个 TransportTask 的完整路径在概念上是：
 
 ```text
@@ -348,7 +374,7 @@ Dashboard 只保留两条有直接业务意义的 `_count` 增长速率：
 
 它们使用 `rate(<metric>_count[$__rate_interval])`，单位是 task/s。Request Rate 表示提交吞吐，`client tasks completed` 表示完成吞吐；两者持续不一致时需要检查积压、超时或失败。`transport tasks completed / client tasks completed` 可粗略观察每个 ClientTask 的 transport fan-out，但会受窗口边界和失败影响。
 
-Average 查询仍必须使用 Histogram 的 `_sum / _count`。这里删除的是多余的可视化曲线，不是删除 Histogram 自带的 `_count` 数据。
+Average 查询使用 Histogram 的 `_sum / _count`。`Send-return Completion - Average/P99` 展示总 completion Histogram；`Completion Breakdown - Average/P99` 展示上述四条专用细分 Histogram。
 
 ## 5. 推荐排障顺序
 
@@ -389,7 +415,11 @@ Dashboard 中对应的图例使用连字符，例如 `batch_store` 的图例为 
 | Client E2E | `kv:kv_client_task_e2e_duration_seconds` | `Client Task End-to-End P99`；`Required Pipeline Boundaries - Average/P50/P99`；`Task Completion Rate` | 顶部 P99 Stat；`ClientTask E2E: API → completed`；`client tasks completed` | Average、P50、P99、`_count` rate | 最重要的 client task 端到端时延，同时统计完成吞吐 |
 | Transport 边界 | `kv:kv_transport_task_pre_send_duration_seconds` | `Required Pipeline Boundaries - Average/P50/P99` | `TransportTask: submit → pre-Send` | Average、P50、P99 | 定位单个 child 的排队和发送准备长尾 |
 | Transport 边界 | `kv:kv_transport_task_send_duration_seconds` | 同上 | `TransportTask: submit → Send returned` | Average、P50、P99 | 定位单个 child 的 `Send()` 调用异常 |
-| Transport Send 后完成阶段 | `kv:kv_transport_task_completion_duration_seconds` | `Required Pipeline Boundaries - Average/P50/P99` | `TransportTask: Send returned → completed` | Average、P50、P99 | 只统计 `Send()` 返回后的后半段，用于定位后端异步完成、CQE/poll 和 completion 长尾；不是 TransportTask E2E |
+| Transport Send 后完成阶段 | `kv:kv_transport_task_completion_duration_seconds` | `Required Pipeline Boundaries - Average/P50/P99`；`Send-return Completion - Average/P99` | `TransportTask: Send returned → completed`；`Send returned → completed` | Average、P50、P99 | 只统计 `Send()` 返回后的后半段；专用图便于定位后端异步完成、CQE/poll 和 completion 长尾；不是 TransportTask E2E |
+| Fake worker 队列 | `kv:kv_fake_backend_task_queue_duration_seconds` | `Completion Breakdown - Average/P99` | `Fake worker queue` | Average、P99 | 仅 Fake provider：定位 fake worker 积压 |
+| Fake worker 处理 | `kv:kv_fake_backend_task_process_duration_seconds` | 同上 | `Fake backend process → publish` | Average、P99 | 仅 Fake provider：定位 `latency_us`、模拟后端处理与发布响应耗时 |
+| 响应观察等待 | `kv:kv_transport_task_response_wait_duration_seconds` | 同上 | `Send returned → final response observed` | Average、P99 | Send 返回后，等待最后一个有效响应被 completion worker 观察到 |
+| Completion 本地收尾 | `kv:kv_transport_task_completion_finalize_duration_seconds` | 同上 | `Final response observed → finalized` | Average、P99 | 解包响应、写 entry 状态、资源释放和任务聚合 |
 | Transport E2E | `kv:kv_transport_task_e2e_duration_seconds` | `Required Pipeline Boundaries - Average/P50/P99`；`Task Completion Rate` | `TransportTask E2E: submit → completed`；`transport tasks completed` | Average、P50、P99、`_count` rate | TransportTask 从成功入队到完成的完整时延，同时统计所有 TransportTask 的完成吞吐 |
 
-合计为 **32 个指标族**：20 个 Counter 和 12 个 Histogram。Histogram 自带的 `_bucket`、`_sum`、`_count` 属于同一个指标族，不应重复理解成三个独立打点。
+合计为 **36 个指标族**：20 个 Counter 和 16 个 Histogram。Histogram 自带的 `_bucket`、`_sum`、`_count` 属于同一个指标族，不应重复理解成三个独立打点。

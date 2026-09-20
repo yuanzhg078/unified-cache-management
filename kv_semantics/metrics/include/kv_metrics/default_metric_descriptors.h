@@ -41,6 +41,10 @@ inline std::vector<MetricDescriptor> DefaultKvMetricDescriptors()
         {"kv_transport_task_process_duration_seconds", MetricType::HISTOGRAM, "KV transport task processing duration", {1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0}},
         {"kv_transport_task_send_duration_seconds", MetricType::HISTOGRAM, "KV transport duration until Send returns", {1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0}},
         {"kv_transport_task_completion_duration_seconds", MetricType::HISTOGRAM, "KV transport completion duration after Send", {1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0}},
+        {"kv_transport_task_response_wait_duration_seconds", MetricType::HISTOGRAM, "KV transport duration from Send return until the final response is observed", {1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0}},
+        {"kv_transport_task_completion_finalize_duration_seconds", MetricType::HISTOGRAM, "KV transport duration from final response observation until task completion", {1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0}},
+        {"kv_fake_backend_task_queue_duration_seconds", MetricType::HISTOGRAM, "KV fake backend task queue duration", {1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0}},
+        {"kv_fake_backend_task_process_duration_seconds", MetricType::HISTOGRAM, "KV fake backend task processing duration until completion is published", {1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0}},
         {"kv_transport_task_e2e_duration_seconds", MetricType::HISTOGRAM, "KV transport task end-to-end duration from submit to completion", {1e-05, 5e-05, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0}},
     };
 }

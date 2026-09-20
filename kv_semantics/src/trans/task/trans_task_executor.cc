@@ -369,8 +369,12 @@ bool TransportTaskExecutor::Poll(const TransportTaskPtr& task)
     if (!task) { return false; }
 
     bool done = false;
+    bool recordCompletionBreakdown = false;
+    double responseWaitSeconds = 0.0;
+    double finalizeSeconds = 0.0;
     {
         std::lock_guard<std::mutex> lock(task->mutex);
+        std::chrono::steady_clock::time_point finalResponseObservedAt{};
         if (task->state.load(std::memory_order_acquire) != TransportTaskState::INFLIGHT) {
             return false;
         }
@@ -411,6 +415,10 @@ bool TransportTaskExecutor::Poll(const TransportTaskPtr& task)
                 }
                 if (completedCid == 0 || completedCid != subBatchContext.cid) { continue; }
 
+                if (task->remainingSubBatchCount == 1) {
+                    finalResponseObservedAt = std::chrono::steady_clock::now();
+                }
+
                 KvResponse response;
                 const auto batchNumber =
                     static_cast<std::uint16_t>(subBatchContext.entryStatus.size());
@@ -441,6 +449,22 @@ bool TransportTaskExecutor::Poll(const TransportTaskPtr& task)
             task->TryFinalizeFromSubBatches();
         }
         done = task->Done();
+        if (done && finalResponseObservedAt != std::chrono::steady_clock::time_point{}) {
+            const auto completedAt = std::chrono::steady_clock::now();
+            responseWaitSeconds =
+                std::chrono::duration<double>(finalResponseObservedAt - task->sendCompletedAt)
+                    .count();
+            finalizeSeconds =
+                std::chrono::duration<double>(completedAt - finalResponseObservedAt).count();
+            recordCompletionBreakdown = true;
+        }
+    }
+    if (recordCompletionBreakdown) {
+        const metrics::MetricUpdate updates[] = {
+            {KV_METRIC("kv_transport_task_response_wait_duration_seconds"),       responseWaitSeconds},
+            {KV_METRIC("kv_transport_task_completion_finalize_duration_seconds"), finalizeSeconds    },
+        };
+        metrics::UpdateStats(updates, std::size(updates));
     }
     return done;
 }

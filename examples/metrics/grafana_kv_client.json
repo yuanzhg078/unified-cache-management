@@ -179,14 +179,71 @@
       "collapsed": false,
       "gridPos": {"h": 1, "w": 24, "x": 0, "y": 50},
       "panels": [],
-      "title": "④ Error Rates",
+      "title": "④ Send-return Completion Analysis",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Mean time from provider Send() return until a TransportTask is completed. Includes response readiness, completion polling, response decode, status aggregation, and resource release.",
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 51},
+      "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "targets": [{"expr": "sum(rate(kv:kv_transport_task_completion_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_completion_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "Send returned → completed", "refId": "A"}],
+      "title": "Send-return Completion - Average",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "P99 time from provider Send() return until a TransportTask is completed. Compare with Average to identify completion-path long tails.",
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 51},
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_transport_task_completion_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "Send returned → completed", "refId": "A"}],
+      "title": "Send-return Completion - P99",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Completion-path stages. Fake-backend metrics are emitted only by the Fake provider; response wait includes backend work and time until the completion worker observes the last response.",
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 61},
+      "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "sum(rate(kv:kv_fake_backend_task_queue_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_fake_backend_task_queue_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "Fake worker queue", "refId": "A"},
+        {"expr": "sum(rate(kv:kv_fake_backend_task_process_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_fake_backend_task_process_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "Fake backend process → publish", "refId": "B"},
+        {"expr": "sum(rate(kv:kv_transport_task_response_wait_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_response_wait_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "Send returned → final response observed", "refId": "C"},
+        {"expr": "sum(rate(kv:kv_transport_task_completion_finalize_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_completion_finalize_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "Final response observed → finalized", "refId": "D"}
+      ],
+      "title": "Completion Breakdown - Average",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Completion-path P99. Compare fake-worker queue/process with response observation and local finalization to isolate the slow stage.",
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 61},
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_fake_backend_task_queue_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "Fake worker queue", "refId": "A"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_fake_backend_task_process_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "Fake backend process → publish", "refId": "B"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_transport_task_response_wait_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "Send returned → final response observed", "refId": "C"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_transport_task_completion_finalize_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "Final response observed → finalized", "refId": "D"}
+      ],
+      "title": "Completion Breakdown - P99",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 71},
+      "panels": [],
+      "title": "⑤ Error Rates",
       "type": "row"
     },
     {
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "description": "Final task error ratio observed by kv-test Wait().",
       "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.001}, {"color": "red", "value": 0.01}]}, "unit": "percentunit"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 51},
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 72},
       "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
       "targets": [{"expr": "sum(rate(kv:kv_client_wait_errors_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_client_wait_requests_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "refId": "A"}],
       "title": "Final Error Rate",
@@ -195,7 +252,7 @@
     {
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 55},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 76},
       "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
       "targets": [
         {"expr": "sum(rate(kv:kv_client_store_errors_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_client_store_requests_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "store submit", "refId": "A"},
