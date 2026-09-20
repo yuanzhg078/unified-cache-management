@@ -25,9 +25,11 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <string>
 #include <utility>
 #include "conn/connection_internal.h"
+#include "kv_metrics/metrics.h"
 #include "logger.h"
 #include "utils/trans_task_utils.h"
 
@@ -300,6 +302,7 @@ bool TransportTaskExecutor::Execute(const TransportTaskPtr& task)
                                              std::memory_order_acq_rel)) {
         return false;
     }
+    const auto processingStartedAt = std::chrono::steady_clock::now();
 
     std::vector<TransportSubBatchContext> subBatchContexts;
     auto status = PrepareTaskSubBatches(*task, subBatchContexts);
@@ -312,8 +315,26 @@ bool TransportTaskExecutor::Execute(const TransportTaskPtr& task)
     if (!status.ok()) {
         KV_ERROR("Abort transport task before send task_id={} code={} message={}", task->taskId,
                  static_cast<int>(status.code), status.message);
-    } else {
+    } else if (!ioBatches.empty()) {
+        const auto preSendAt = std::chrono::steady_clock::now();
+        const metrics::MetricUpdate preSendUpdates[] = {
+            {KV_METRIC("kv_transport_task_pre_send_duration_seconds"),
+             std::chrono::duration<double>(preSendAt - task->submittedAt).count()          },
+            {KV_METRIC("kv_transport_task_queue_duration_seconds"),
+             std::chrono::duration<double>(processingStartedAt - task->submittedAt).count()},
+            {KV_METRIC("kv_transport_task_process_duration_seconds"),
+             std::chrono::duration<double>(preSendAt - processingStartedAt).count()        },
+        };
+        metrics::UpdateStats(preSendUpdates, std::size(preSendUpdates));
+        if (task->onPreSend) { task->onPreSend(); }
         SendSubBatchBuffers(subBatchContexts, ioBatches);
+        task->sendCompletedAt = std::chrono::steady_clock::now();
+        task->sendReturned.store(true, std::memory_order_release);
+        const metrics::MetricUpdate sendUpdate{
+            KV_METRIC("kv_transport_task_send_duration_seconds"),
+            std::chrono::duration<double>(task->sendCompletedAt - task->submittedAt).count()};
+        metrics::UpdateStats(&sendUpdate, 1);
+        if (task->onSendComplete) { task->onSendComplete(); }
     }
 
     bool done = false;
