@@ -152,9 +152,9 @@ Dashboard 面板：`Pre-Send Stage Breakdown - Average`。
 |---|---|---|---|
 | `kv:kv_client_task_enqueue_duration_seconds` | `1 API → client queue` | 内部 `SubmitAsync()` 入口 → 成功入队前记录的 `enqueuedAt` | 创建 task、复制描述符、MR 映射、task manager 或 producer mutex 慢 |
 | `kv:kv_client_task_queue_duration_seconds` | `2 client queue wait` | 同一个 `enqueuedAt` → client worker 开始处理 | `TryPush()` 开销、client worker 饱和或排队 |
-| `kv:kv_client_task_process_duration_seconds` | `3 client route/split → transport submit` | client worker 取出 → 所有 `transport->Submit()` 返回 | 路由、拆分、创建 child 或 transport 提交慢 |
+| `kv:kv_client_task_process_duration_seconds` | `3 client process` | client worker 取出 → 所有 `transport->Submit()` 返回 | 路由、拆分、创建 child 或 transport 提交慢 |
 | `kv:kv_transport_task_queue_duration_seconds` | `4 transport queue wait` | transport task 提交 → executor 取出 | transport executor 饱和或排队 |
-| `kv:kv_transport_task_process_duration_seconds` | `5 transport prepare → pre-Send` | executor 取出 → 调用 provider `Send()` 前 | sub-batch、buffer、连接和请求属性准备慢 |
+| `kv:kv_transport_task_process_duration_seconds` | `5 transport process` | executor 取出 → 调用 provider `Send()` 前 | sub-batch、buffer、连接和请求属性准备慢 |
 
 client 的前三段以同一任务的 `enqueuedAt`、`processingStartedAt` 为共享边界；成功到达对应阶段时，`enqueue + queue = SubmitAsync() 入口 → client worker 开始处理`。`enqueuedAt` 必须在 `TryPush()` 发布任务前写入，因此少量 `TryPush()` 开销归入 queue 段。transport 指标按 child TransportTask 采样；一个 ClientTask 可拆成多个 child，且 child 提交可能与 client process 阶段重叠，所以不能把五个指标的聚合平均值直接相加。
 
@@ -385,9 +385,9 @@ Dashboard 中对应的图例使用连字符，例如 `batch_store` 的图例为 
 | Wait/最终结果错误 | `kv:kv_client_wait_errors_total` | 同上 | 顶部错误率 Stat；`wait/final result` | errors / Wait calls | 统计 `Wait()` 自身失败或 `TaskResult.status` 失败的调用 |
 | Pre-Send 阶段 1 | `kv:kv_client_task_enqueue_duration_seconds` | `Pre-Send Stage Breakdown - Average` | `1 API → client queue` | Average | API 建 task、MR 映射和入队耗时 |
 | Pre-Send 阶段 2 | `kv:kv_client_task_queue_duration_seconds` | 同上 | `2 client queue wait` | Average | client worker 排队耗时 |
-| Pre-Send 阶段 3 | `kv:kv_client_task_process_duration_seconds` | 同上 | `3 client route/split → transport submit` | Average | 路由、拆分 child 和提交 TransportTask 耗时 |
+| Pre-Send 阶段 3 | `kv:kv_client_task_process_duration_seconds` | 同上 | `3 client process` | Average | 路由、拆分 child 和提交 TransportTask 耗时 |
 | Pre-Send 阶段 4 | `kv:kv_transport_task_queue_duration_seconds` | 同上 | `4 transport queue wait` | Average | transport executor 排队耗时 |
-| Pre-Send 阶段 5 | `kv:kv_transport_task_process_duration_seconds` | 同上 | `5 transport prepare → pre-Send` | Average | buffer、连接和请求属性等发送准备耗时 |
+| Pre-Send 阶段 5 | `kv:kv_transport_task_process_duration_seconds` | 同上 | `5 transport process` | Average | buffer、连接和请求属性等发送准备耗时 |
 | Client 边界 | `kv:kv_client_task_pre_send_duration_seconds` | `Required Pipeline Boundaries - P50/P99` | `ClientTask: API → all children pre-Send` | P50、P99 | 判断整个 client task 在发送前是否变慢 |
 | Client 边界 | `kv:kv_client_task_send_duration_seconds` | 同上 | `ClientTask: API → all Send returned` | P50、P99 | 判断最慢 child 的 `Send()` 返回边界 |
 | Client E2E | `kv:kv_client_task_e2e_duration_seconds` | `Client Task End-to-End P99`；`Required Pipeline Boundaries - P50/P99`；`Task Completion Rate` | 顶部 P99 Stat；`ClientTask E2E: API → completed`；`client tasks completed` | P50、P99、`_count` rate | 最重要的 client task 端到端时延，同时统计完成吞吐 |

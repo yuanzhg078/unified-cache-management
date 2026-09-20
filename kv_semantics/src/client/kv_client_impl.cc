@@ -194,6 +194,7 @@ Status KvClientImpl::Shutdown()
         std::lock_guard<std::mutex> lock{producerMu_};
         stopWorker_.store(true, std::memory_order_release);
     }
+    workerCv_.notify_one();
     JoinBackgroundRefresh();
     if (worker_.joinable()) { worker_.join(); }
 
@@ -483,6 +484,7 @@ Status KvClientImpl::SubmitAsync(AsuOpType opType, const std::vector<KVBuffer>& 
             return Status::Error(StatusCode::RESOURCE_BUSY, "client task queue is full");
         }
     }
+    taskQueue_.NotifyOne(workerCv_);
     const metrics::MetricUpdate enqueueUpdate{
         KV_METRIC("kv_client_task_enqueue_duration_seconds"),
         std::chrono::duration<double>(enqueuedAt - taskStart).count()};
@@ -539,6 +541,7 @@ Status KvClientImpl::SubmitAsync(AsuOpType opType, const std::vector<CacheKey>& 
             return Status::Error(StatusCode::RESOURCE_BUSY, "client task queue is full");
         }
     }
+    taskQueue_.NotifyOne(workerCv_);
     const metrics::MetricUpdate enqueueUpdate{
         KV_METRIC("kv_client_task_enqueue_duration_seconds"),
         std::chrono::duration<double>(enqueuedAt - taskStart).count()};
@@ -568,7 +571,7 @@ void KvClientImpl::WorkerLoop()
         }
         if (IsRefreshNeeded(status)) { RequestBackgroundRefresh(); }
     };
-    taskQueue_.ConsumerLoop(stopWorker_, processTask);
+    taskQueue_.ConsumerLoop(stopWorker_, producerMu_, workerCv_, processTask);
 
     ClientTaskPtr ctx;
     while (taskQueue_.TryPop(ctx)) { processTask(std::move(ctx)); }
