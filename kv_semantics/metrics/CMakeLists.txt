@@ -34,8 +34,6 @@ target_include_directories(kv_metrics
 target_link_libraries(kv_metrics PRIVATE pthread)
 set_target_properties(kv_metrics PROPERTIES
     OUTPUT_NAME kv_metrics
-    VERSION ${PROJECT_VERSION}
-    SOVERSION 1
     INSTALL_RPATH "$ORIGIN"
 )
 
