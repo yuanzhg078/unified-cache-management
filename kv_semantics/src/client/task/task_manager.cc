@@ -146,11 +146,11 @@ Status ClientTaskManager::Process(const ClientTaskPtr& task)
     }
     const auto dispatchStatus = DispatchTask(task);
     if (dispatchStatus.ok()) {
-        const metrics::MetricUpdate update{KV_METRIC("kv_client_task_process_duration_seconds"),
-                                           std::chrono::duration<double>(
-                                               std::chrono::steady_clock::now() -
-                                               task->processingStartedAt)
-                                               .count()};
+        const metrics::MetricUpdate update{
+            KV_METRIC("kv_client_task_process_duration_seconds"),
+            std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                          task->processingStartedAt)
+                .count()};
         metrics::UpdateStats(&update, 1);
     }
     return dispatchStatus;
@@ -308,10 +308,7 @@ Status ClientTaskManager::BuildTransportTasks(const ClientTaskPtr& task)
     std::vector<KVBuffer>{}.swap(task->entries);
     std::vector<CacheKey>{}.swap(task->keys);
     task->remainingTransportTasks.store(task->transportTasks.size(), std::memory_order_release);
-    task->remainingTransportPreSendTasks.store(task->transportTasks.size(),
-                                               std::memory_order_release);
-    task->remainingTransportSendTasks.store(task->transportTasks.size(),
-                                            std::memory_order_release);
+    task->remainingTransportSendTasks.store(task->transportTasks.size(), std::memory_order_release);
     return Status::OK();
 }
 
@@ -332,19 +329,6 @@ Status ClientTaskManager::DispatchTask(const ClientTaskPtr& task)
             auto task = clientTask.lock();
             if (!task) { return; }
             CompleteTransportTask(task, taskIndex, std::move(result));
-        };
-        transportTask->onPreSend = [clientTask] {
-            auto task = clientTask.lock();
-            if (!task) { return; }
-            if (task->remainingTransportPreSendTasks.fetch_sub(1, std::memory_order_acq_rel) ==
-                1) {
-                const metrics::MetricUpdate update{
-                    KV_METRIC("kv_client_task_pre_send_duration_seconds"),
-                    std::chrono::duration<double>(std::chrono::steady_clock::now() -
-                                                  task->submittedAt)
-                        .count()};
-                metrics::UpdateStats(&update, 1);
-            }
         };
         transportTask->onSendComplete = [clientTask] {
             auto task = clientTask.lock();

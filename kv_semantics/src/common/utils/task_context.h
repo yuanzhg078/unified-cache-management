@@ -104,7 +104,6 @@ struct TransportTask {
     std::atomic<bool> completionNotified{false};
     std::chrono::steady_clock::time_point submittedAt{};
     std::chrono::steady_clock::time_point sendCompletedAt{};
-    std::function<void()> onPreSend;
     std::function<void()> onSendComplete;
     std::atomic<bool> sendReturned{false};
     metrics::CachedMetric* asuCompletionMetric{nullptr};
@@ -135,7 +134,6 @@ struct ClientTask {
     QueryResult queryResult;
 
     std::atomic<std::size_t> remainingTransportTasks{0};
-    std::atomic<std::size_t> remainingTransportPreSendTasks{0};
     std::atomic<std::size_t> remainingTransportSendTasks{0};
     std::chrono::steady_clock::time_point submittedAt{};
     std::chrono::steady_clock::time_point enqueuedAt{};
