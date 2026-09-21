@@ -41,7 +41,13 @@ TransportTaskExecutor::TransportTaskExecutor(
     : config_(config),
       ioScheduler_(config),
       transProvider_(transProvider),
-      connManager_(connectionManager)
+      connManager_(connectionManager),
+      asuSendMetric_("kv_transport_node_task_send_duration_seconds",
+                     {
+                         {"node_id", std::to_string(config.nodeId)}
+}),
+      asuCompletionMetric_("kv_transport_node_task_completion_duration_seconds",
+                           {{"node_id", std::to_string(config.nodeId)}})
 {
 }
 
@@ -56,6 +62,8 @@ TransportTaskExecutor::~TransportTaskExecutor()
 
 Status TransportTaskExecutor::Init()
 {
+    (void)metrics::RegisterMetricLabels(asuSendMetric_.Name(), asuSendMetric_.Labels());
+    (void)metrics::RegisterMetricLabels(asuCompletionMetric_.Name(), asuCompletionMetric_.Labels());
     auto status = sendBufferManager_.Init("asu send buffer", MemoryType::HOST_PINNED,
                                           config_.sendBufferSlotSize, config_.sendBufferSlotNum);
     if (!status.ok()) {
@@ -303,6 +311,7 @@ bool TransportTaskExecutor::Execute(const TransportTaskPtr& task)
         return false;
     }
     const auto processingStartedAt = std::chrono::steady_clock::now();
+    task->asuCompletionMetric = &asuCompletionMetric_;
 
     std::vector<TransportSubBatchContext> subBatchContexts;
     auto status = PrepareTaskSubBatches(*task, subBatchContexts);
@@ -330,38 +339,41 @@ bool TransportTaskExecutor::Execute(const TransportTaskPtr& task)
         SendSubBatchBuffers(subBatchContexts, ioBatches);
         task->sendCompletedAt = std::chrono::steady_clock::now();
         task->sendReturned.store(true, std::memory_order_release);
-        const metrics::MetricUpdate sendUpdate{
-            KV_METRIC("kv_transport_task_send_duration_seconds"),
-            std::chrono::duration<double>(task->sendCompletedAt - task->submittedAt).count()};
-        metrics::UpdateStats(&sendUpdate, 1);
-        if (task->onSendComplete) { task->onSendComplete(); }
+        const metrics::MetricUpdate
+            sendUpdates[] =
+                {KV_METRIC("kv_transport_task_send_duration_seconds"),
+                 std::chrono::duration<double>(task->sendCompletedAt - task->submittedAt).count()},
+            {asuSendMetric_,
+             std::chrono::duration<double>(task->sendCompletedAt - task->submittedAt).count()},
+    };
+    metrics::UpdateStats(sendUpdates, std::size(sendUpdates));
+    if (task->onSendComplete) { task->onSendComplete(); }
+}
+
+bool done = false;
+{
+    std::lock_guard<std::mutex> lock(task->mutex);
+    if (task->Done()) {
+        KV_DEBUG("TransportTaskExecutor::Execute canceled during process task_id={} sub_batches={}",
+                 task->taskId, subBatchContexts.size());
+        ReleaseAllSubBatchResources(subBatchContexts);
+        return false;
     }
 
-    bool done = false;
-    {
-        std::lock_guard<std::mutex> lock(task->mutex);
-        if (task->Done()) {
-            KV_DEBUG(
-                "TransportTaskExecutor::Execute canceled during process task_id={} sub_batches={}",
-                task->taskId, subBatchContexts.size());
-            ReleaseAllSubBatchResources(subBatchContexts);
-            return false;
-        }
+    if (!status.ok()) { AbortSubBatchesBeforeSend(*task, subBatchContexts); }
+    *task->subBatchContexts = std::move(subBatchContexts);
+    task->InitializeRemainingSubBatchCount();
+    task->TryFinalizeFromSubBatches();
+    KV_DEBUG(
+        "TransportTaskExecutor::Execute submitted task_id={} op_type={} entries={} keys={} "
+        "sub_batches={} done={} code={} message={}",
+        task->taskId, static_cast<int>(task->opType), task->entries.size(), task->keys.size(),
+        task->subBatchContexts->size(), task->Done(), static_cast<int>(task->finalStatus.code),
+        task->finalStatus.message);
 
-        if (!status.ok()) { AbortSubBatchesBeforeSend(*task, subBatchContexts); }
-        *task->subBatchContexts = std::move(subBatchContexts);
-        task->InitializeRemainingSubBatchCount();
-        task->TryFinalizeFromSubBatches();
-        KV_DEBUG(
-            "TransportTaskExecutor::Execute submitted task_id={} op_type={} entries={} keys={} "
-            "sub_batches={} done={} code={} message={}",
-            task->taskId, static_cast<int>(task->opType), task->entries.size(), task->keys.size(),
-            task->subBatchContexts->size(), task->Done(), static_cast<int>(task->finalStatus.code),
-            task->finalStatus.message);
-
-        done = task->Done();
-    }
-    return done;
+    done = task->Done();
+}
+return done;
 }
 
 bool TransportTaskExecutor::Poll(const TransportTaskPtr& task)

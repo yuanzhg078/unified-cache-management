@@ -297,6 +297,7 @@ TEST(StandaloneMetricsTest, ExposesKvTestCoreBuiltInMetrics)
         {KV_METRIC("kv_client_store_entries_total"),                          8.0   },
         {KV_METRIC("kv_client_wait_errors_total"),                            1.0   },
         {KV_METRIC("kv_client_task_e2e_duration_seconds"),                    0.002 },
+        {KV_METRIC("kv_transport_task_send_call_duration_seconds"),           0.0001},
         {KV_METRIC("kv_transport_task_completion_duration_seconds"),          0.001 },
         {KV_METRIC("kv_transport_task_response_wait_duration_seconds"),       0.0008},
         {KV_METRIC("kv_transport_task_completion_finalize_duration_seconds"), 0.0002},
@@ -312,6 +313,8 @@ TEST(StandaloneMetricsTest, ExposesKvTestCoreBuiltInMetrics)
     EXPECT_NE(response.find("kv:kv_client_store_entries_total 8"), std::string::npos);
     EXPECT_NE(response.find("kv:kv_client_wait_errors_total 1"), std::string::npos);
     EXPECT_NE(response.find("kv:kv_client_task_e2e_duration_seconds_count 1"), std::string::npos);
+    EXPECT_NE(response.find("kv:kv_transport_task_send_call_duration_seconds_count 1"),
+              std::string::npos);
     EXPECT_NE(response.find("kv:kv_transport_task_completion_duration_seconds_count 1"),
               std::string::npos);
     EXPECT_NE(response.find("kv:kv_transport_task_response_wait_duration_seconds_count 1"),
@@ -324,6 +327,29 @@ TEST(StandaloneMetricsTest, ExposesKvTestCoreBuiltInMetrics)
               std::string::npos);
     EXPECT_NE(response.find("kv:kv_transport_task_e2e_duration_seconds_count 1"),
               std::string::npos);
+    Shutdown();
+}
+
+TEST(StandaloneMetricsTest, ExposesLabeledMetricInstances)
+{
+    StandaloneMetricsConfig config;
+    config.port = FindUnusedLoopbackPort();
+    ASSERT_NE(config.port, 0);
+
+    std::string error;
+    ASSERT_TRUE(SetUpStandaloneMetrics(config, &error)) << error;
+    const MetricLabels labels{
+        {"node_id", "1"}
+    };
+    ASSERT_TRUE(RegisterMetricLabels("kv_transport_node_task_send_duration_seconds", labels));
+    CachedMetric metric{"kv_transport_node_task_send_duration_seconds", labels};
+    UpdateStats(metric, 0.001);
+    Flush();
+
+    const auto response = HttpGet(config.port, config.metricsPath);
+    EXPECT_NE(
+        response.find("kv:kv_transport_node_task_send_duration_seconds_count{node_id=\"1\"} 1"),
+        std::string::npos);
     Shutdown();
 }
 

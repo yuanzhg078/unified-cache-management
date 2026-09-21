@@ -1,8 +1,54 @@
 {
   "annotations": {"list": []},
-  "description": "Core kv-test client/transport metrics for load, error, pre-Send stages, Send/completion boundaries, and client-task end-to-end latency.",
+  "description": "Core kv-test client/transport metrics for load, error, pre-Send stages, pure Send-call analysis, Send/completion boundaries, and client-task end-to-end latency.",
   "editable": true,
   "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 45},
+      "panels": [],
+      "title": "⑤ End-to-End",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Mean end-to-end task latency. ClientTask is API to client completion; TransportTask is submit to transport completion.",
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 9, "w": 8, "x": 0, "y": 46},
+      "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"expr": "sum(rate(kv:kv_client_task_e2e_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_client_task_e2e_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "ClientTask: API → completed", "refId": "A"},
+        {"expr": "sum(rate(kv:kv_transport_task_e2e_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_e2e_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "TransportTask: submit → completed", "refId": "B"}
+      ],
+      "title": "End-to-End - Average",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "P50 end-to-end task latency.",
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 9, "w": 8, "x": 8, "y": 46},
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_client_task_e2e_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "ClientTask: API → completed", "refId": "A"},
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_transport_task_e2e_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "TransportTask: submit → completed", "refId": "B"}
+      ],
+      "title": "End-to-End - P50",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "P99 end-to-end task latency.",
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 9, "w": 8, "x": 16, "y": 46},
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_client_task_e2e_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "ClientTask: API → completed", "refId": "A"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_transport_task_e2e_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "TransportTask: submit → completed", "refId": "B"}
+      ],
+      "title": "End-to-End - P99",
+      "type": "timeseries"
+    },
     {
       "collapsed": false,
       "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
@@ -77,7 +123,7 @@
       "collapsed": false,
       "gridPos": {"h": 1, "w": 24, "x": 0, "y": 13},
       "panels": [],
-      "title": "② Queue and Pre-Send Critical Path",
+      "title": "② Queue / Process and Send Path",
       "type": "row"
     },
     {
@@ -88,96 +134,67 @@
         {"matcher": {"id": "byName", "options": "2 client queue wait"}, "properties": [{"id": "color", "value": {"fixedColor": "orange", "mode": "fixed"}}]},
         {"matcher": {"id": "byName", "options": "3 client process"}, "properties": [{"id": "color", "value": {"fixedColor": "purple", "mode": "fixed"}}]},
         {"matcher": {"id": "byName", "options": "4 transport queue wait"}, "properties": [{"id": "color", "value": {"fixedColor": "red", "mode": "fixed"}}]},
-        {"matcher": {"id": "byName", "options": "5 transport process"}, "properties": [{"id": "color", "value": {"fixedColor": "blue", "mode": "fixed"}}]}
+        {"matcher": {"id": "byName", "options": "5 transport executor → pre-Send"}, "properties": [{"id": "color", "value": {"fixedColor": "blue", "mode": "fixed"}}]}
       ]},
-      "gridPos": {"h": 10, "w": 24, "x": 0, "y": 14},
+      "gridPos": {"h": 10, "w": 8, "x": 0, "y": 14},
       "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "right", "showLegend": true, "width": 460}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "targets": [
         {"expr": "sum(rate(kv:kv_client_task_enqueue_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_client_task_enqueue_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "1 API → client queue", "refId": "A"},
         {"expr": "sum(rate(kv:kv_client_task_queue_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_client_task_queue_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "2 client queue wait", "refId": "B"},
         {"expr": "sum(rate(kv:kv_client_task_process_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_client_task_process_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "3 client process", "refId": "C"},
         {"expr": "sum(rate(kv:kv_transport_task_queue_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_queue_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "4 transport queue wait", "refId": "D"},
-        {"expr": "sum(rate(kv:kv_transport_task_process_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_process_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "5 transport process", "refId": "E"}
+        {"expr": "sum(rate(kv:kv_transport_task_process_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_process_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "5 transport executor → pre-Send", "refId": "E"},
+        {"expr": "sum(rate(kv:kv_client_task_send_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_client_task_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "ClientTask: API → all Send returned", "refId": "F"},
+        {"expr": "sum(rate(kv:kv_transport_task_pre_send_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_pre_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "TransportTask: submit → pre-Send", "refId": "G"},
+        {"expr": "sum(rate(kv:kv_transport_task_send_call_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_send_call_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "6 provider Send() call", "refId": "H"},
+        {"expr": "sum(rate(kv:kv_transport_task_send_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "TransportTask: submit → Send returned", "refId": "I"}
       ],
-      "title": "Pre-Send Stage Breakdown - Average",
+      "title": "Queue / Process and Send Path - Average",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "P50 of the five non-overlapping stages from API entry to the provider pre-Send boundary.",
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 8, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "decimals": 6, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 10, "w": 8, "x": 8, "y": 14},
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_client_task_enqueue_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "1 API → client queue", "refId": "A"},
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_client_task_queue_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "2 client queue wait", "refId": "B"},
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_client_task_process_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "3 client process", "refId": "C"},
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_transport_task_queue_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "4 transport queue wait", "refId": "D"},
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_transport_task_process_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "5 transport executor → pre-Send", "refId": "E"},
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_client_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "ClientTask: API → all Send returned", "refId": "F"},
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_transport_task_pre_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "TransportTask: submit → pre-Send", "refId": "G"},
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_transport_task_send_call_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "6 provider Send() call", "refId": "H"},
+        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_transport_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "TransportTask: submit → Send returned", "refId": "I"}
+      ],
+      "title": "Queue / Process and Send Path - P50",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "P99 of the five non-overlapping stages from API entry to the provider pre-Send boundary.",
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 8, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "decimals": 6, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 10, "w": 8, "x": 16, "y": 14},
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_client_task_enqueue_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "1 API → client queue", "refId": "A"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_client_task_queue_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "2 client queue wait", "refId": "B"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_client_task_process_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "3 client process", "refId": "C"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_transport_task_queue_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "4 transport queue wait", "refId": "D"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_transport_task_process_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "5 transport executor → pre-Send", "refId": "E"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_client_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "ClientTask: API → all Send returned", "refId": "F"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_transport_task_pre_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "TransportTask: submit → pre-Send", "refId": "G"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_transport_task_send_call_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "6 provider Send() call", "refId": "H"},
+        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_transport_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "TransportTask: submit → Send returned", "refId": "I"}
+      ],
+      "title": "Queue / Process and Send Path - P99",
       "type": "timeseries"
     },
     {
       "collapsed": false,
       "gridPos": {"h": 1, "w": 24, "x": 0, "y": 24},
-      "panels": [],
-      "title": "③ Task Latency and Completion",
-      "type": "row"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "description": "Mean latency at the required task/transport boundaries, including complete ClientTask and TransportTask E2E.",
-      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": [{"matcher": {"id": "byName", "options": "ClientTask E2E: API → completed"}, "properties": [{"id": "color", "value": {"fixedColor": "purple", "mode": "fixed"}}, {"id": "custom.lineWidth", "value": 4}]}, {"matcher": {"id": "byName", "options": "TransportTask E2E: submit → completed"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}, {"id": "custom.lineWidth", "value": 3}]}]},
-      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 25},
-      "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [
-        {"expr": "sum(rate(kv:kv_client_task_pre_send_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_client_task_pre_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "ClientTask: API → all children pre-Send", "refId": "A"},
-        {"expr": "sum(rate(kv:kv_client_task_send_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_client_task_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "ClientTask: API → all Send returned", "refId": "B"},
-        {"expr": "sum(rate(kv:kv_transport_task_pre_send_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_pre_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "TransportTask: submit → pre-Send", "refId": "C"},
-        {"expr": "sum(rate(kv:kv_transport_task_send_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_send_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "TransportTask: submit → Send returned", "refId": "D"},
-        {"expr": "sum(rate(kv:kv_transport_task_completion_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_completion_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "TransportTask: Send returned → completed", "refId": "E"},
-        {"expr": "sum(rate(kv:kv_client_task_e2e_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_client_task_e2e_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "ClientTask E2E: API → completed", "refId": "F"},
-        {"expr": "sum(rate(kv:kv_transport_task_e2e_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_e2e_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "TransportTask E2E: submit → completed", "refId": "G"}
-      ],
-      "title": "Required Pipeline Boundaries - Average",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "description": "Typical latency at the required task/transport boundaries, including complete ClientTask and TransportTask E2E.",
-      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": [{"matcher": {"id": "byName", "options": "ClientTask E2E: API → completed"}, "properties": [{"id": "color", "value": {"fixedColor": "purple", "mode": "fixed"}}, {"id": "custom.lineWidth", "value": 4}]}, {"matcher": {"id": "byName", "options": "TransportTask E2E: submit → completed"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}, {"id": "custom.lineWidth", "value": 3}]}]},
-      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 34},
-      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [
-        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_client_task_pre_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "ClientTask: API → all children pre-Send", "refId": "A"},
-        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_client_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "ClientTask: API → all Send returned", "refId": "B"},
-        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_transport_task_pre_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "TransportTask: submit → pre-Send", "refId": "C"},
-        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_transport_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "TransportTask: submit → Send returned", "refId": "D"},
-        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_transport_task_completion_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "TransportTask: Send returned → completed", "refId": "E"},
-        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_client_task_e2e_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "ClientTask E2E: API → completed", "refId": "F"},
-        {"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_transport_task_e2e_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "TransportTask E2E: submit → completed", "refId": "G"}
-      ],
-      "title": "Required Pipeline Boundaries - P50",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "description": "Long-tail latency. Compare with P50 to distinguish systemic slowdown from occasional queueing or a slow child task. Includes complete ClientTask and TransportTask E2E.",
-      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": [{"matcher": {"id": "byName", "options": "ClientTask E2E: API → completed"}, "properties": [{"id": "color", "value": {"fixedColor": "purple", "mode": "fixed"}}, {"id": "custom.lineWidth", "value": 4}]}, {"matcher": {"id": "byName", "options": "TransportTask E2E: submit → completed"}, "properties": [{"id": "color", "value": {"fixedColor": "green", "mode": "fixed"}}, {"id": "custom.lineWidth", "value": 3}]}]},
-      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 34},
-      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
-      "targets": [
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_client_task_pre_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "ClientTask: API → all children pre-Send", "refId": "A"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_client_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "ClientTask: API → all Send returned", "refId": "B"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_transport_task_pre_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "TransportTask: submit → pre-Send", "refId": "C"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_transport_task_send_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "TransportTask: submit → Send returned", "refId": "D"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_transport_task_completion_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "TransportTask: Send returned → completed", "refId": "E"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_client_task_e2e_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "ClientTask E2E: API → completed", "refId": "F"},
-        {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_transport_task_e2e_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "TransportTask E2E: submit → completed", "refId": "G"}
-      ],
-      "title": "Required Pipeline Boundaries - P99",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
-      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []},
-      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 43},
-      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
-      "targets": [
-        {"expr": "sum(rate(kv:kv_client_task_e2e_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval]))", "legendFormat": "client tasks completed", "refId": "A"},
-        {"expr": "sum(rate(kv:kv_transport_task_e2e_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval]))", "legendFormat": "transport tasks completed", "refId": "B"}
-      ],
-      "title": "Task Completion Rate",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 50},
       "panels": [],
       "title": "④ Send-return Completion Analysis",
       "type": "row"
@@ -186,7 +203,7 @@
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "description": "Mean time from provider Send() return until a TransportTask is completed. Includes response readiness, completion polling, response decode, status aggregation, and resource release.",
       "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": []},
-      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 51},
+      "gridPos": {"h": 9, "w": 8, "x": 0, "y": 25},
       "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
       "targets": [{"expr": "sum(rate(kv:kv_transport_task_completion_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_transport_task_completion_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "Send returned → completed", "refId": "A"}],
       "title": "Send-return Completion - Average",
@@ -194,9 +211,19 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "P50 time from provider Send() return until a TransportTask is completed.",
+      "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": []},
+      "gridPos": {"h": 9, "w": 8, "x": 8, "y": 25},
+      "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
+      "targets": [{"expr": "histogram_quantile(0.50, sum by (le) (rate(kv:kv_transport_task_completion_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "Send returned → completed", "refId": "A"}],
+      "title": "Send-return Completion - P50",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "description": "P99 time from provider Send() return until a TransportTask is completed. Compare with Average to identify completion-path long tails.",
       "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": []},
-      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 51},
+      "gridPos": {"h": 9, "w": 8, "x": 16, "y": 25},
       "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
       "targets": [{"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_transport_task_completion_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "Send returned → completed", "refId": "A"}],
       "title": "Send-return Completion - P99",
@@ -206,7 +233,7 @@
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "description": "Completion-path stages. Fake-backend metrics are emitted only by the Fake provider; response wait includes backend work and time until the completion worker observes the last response.",
       "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": []},
-      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 61},
+      "gridPos": {"h": 10, "w": 12, "x": 0, "y": 35},
       "options": {"legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "targets": [
         {"expr": "sum(rate(kv:kv_fake_backend_task_queue_duration_seconds_sum{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_fake_backend_task_queue_duration_seconds_count{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "Fake worker queue", "refId": "A"},
@@ -221,7 +248,7 @@
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "description": "Completion-path P99. Compare fake-worker queue/process with response observation and local finalization to isolate the slow stage.",
       "fieldConfig": {"defaults": {"custom": {"drawStyle": "line", "fillOpacity": 6, "gradientMode": "opacity", "lineInterpolation": "smooth", "lineWidth": 2, "showPoints": "never"}, "unit": "s"}, "overrides": []},
-      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 61},
+      "gridPos": {"h": 10, "w": 12, "x": 12, "y": 35},
       "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
       "targets": [
         {"expr": "histogram_quantile(0.99, sum by (le) (rate(kv:kv_fake_backend_task_queue_duration_seconds_bucket{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])))", "legendFormat": "Fake worker queue", "refId": "A"},
@@ -234,16 +261,16 @@
     },
     {
       "collapsed": false,
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 71},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 56},
       "panels": [],
-      "title": "⑤ Error Rates",
+      "title": "⑥ Error Rates",
       "type": "row"
     },
     {
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "description": "Final task error ratio observed by kv-test Wait().",
       "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "decimals": 2, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 0.001}, {"color": "red", "value": 0.01}]}, "unit": "percentunit"}, "overrides": []},
-      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 72},
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 57},
       "options": {"colorMode": "background", "graphMode": "area", "justifyMode": "auto", "orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "textMode": "auto", "wideLayout": true},
       "targets": [{"expr": "sum(rate(kv:kv_client_wait_errors_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_client_wait_requests_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "refId": "A"}],
       "title": "Final Error Rate",
@@ -252,7 +279,7 @@
     {
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "fieldConfig": {"defaults": {"unit": "percentunit"}, "overrides": []},
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 76},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 61},
       "options": {"legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi"}},
       "targets": [
         {"expr": "sum(rate(kv:kv_client_store_errors_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])) / clamp_min(sum(rate(kv:kv_client_store_requests_total{source=~\"$source\",model_name=~\"$model_name\",worker_id=~\"$worker_id\"}[$__rate_interval])), 1e-12)", "legendFormat": "store submit", "refId": "A"},

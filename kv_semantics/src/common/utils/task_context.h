@@ -32,6 +32,7 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#include "kv_metrics/metrics.h"
 #include "kv_types.h"
 #include "trans_types.h"
 
@@ -106,6 +107,7 @@ struct TransportTask {
     std::function<void()> onPreSend;
     std::function<void()> onSendComplete;
     std::atomic<bool> sendReturned{false};
+    metrics::CachedMetric* asuCompletionMetric{nullptr};
 
     std::atomic<TransportTaskState> state{TransportTaskState::PENDING};
     Status finalStatus{Status::OK()};

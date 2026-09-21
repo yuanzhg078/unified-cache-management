@@ -70,11 +70,13 @@ void TransportTaskManager::NotifyCompletion(const TransportTaskPtr& task)
         {KV_METRIC("kv_transport_task_e2e_duration_seconds"),
          std::chrono::duration<double>(completedAt - task->submittedAt).count()},
         {KV_METRIC("kv_transport_task_completion_duration_seconds"),
-         sendReturned
-             ? std::chrono::duration<double>(completedAt - task->sendCompletedAt).count()
-             : 0.0                                                             },
+         sendReturned ? std::chrono::duration<double>(completedAt - task->sendCompletedAt).count()
+                      : 0.0                                                    },
+        {task->asuCompletionMetric,
+         sendReturned ? std::chrono::duration<double>(completedAt - task->sendCompletedAt).count()
+                      : 0.0                                                    },
     };
-    metrics::UpdateStats(updates, sendReturned ? std::size_t{2} : std::size_t{1});
+    metrics::UpdateStats(updates, sendReturned ? std::size_t{3} : std::size_t{1});
     TaskResult result;
     BuildResult(*task, result);
     (void)task->NotifyCompletion(std::move(result));
