@@ -289,6 +289,9 @@ Status TransportTaskExecutor::AssignSubBatchConnections(
     for (auto& subBatchContext : subBatchContexts) {
         auto channel = connManager_->SelectConnection();
         if (!channel) {
+            const metrics::MetricUpdate update{
+                KV_METRIC("kv_transport_task_connection_errors_total"), 1.0};
+            metrics::UpdateStats(&update, 1);
             const auto subBatchStatus =
                 Status::Error(StatusCode::CONNECTION_ERROR, "no available connection channel");
             std::fill(subBatchContext.entryStatus.begin(), subBatchContext.entryStatus.end(),
@@ -338,10 +341,13 @@ bool TransportTaskExecutor::Execute(const TransportTaskPtr& task)
         SendSubBatchBuffers(subBatchContexts, ioBatches);
         task->sendCompletedAt = std::chrono::steady_clock::now();
         task->sendReturned.store(true, std::memory_order_release);
-        const metrics::MetricUpdate sendUpdate{
-            asuSendMetric_,
-            std::chrono::duration<double>(task->sendCompletedAt - task->submittedAt).count()};
-        metrics::UpdateStats(&sendUpdate, 1);
+        const metrics::MetricUpdate sendUpdates[] = {
+            {KV_METRIC("kv_transport_task_send_duration_seconds"),
+             std::chrono::duration<double>(task->sendCompletedAt - task->submittedAt).count()},
+            {asuSendMetric_,
+             std::chrono::duration<double>(task->sendCompletedAt - task->submittedAt).count()},
+        };
+        metrics::UpdateStats(sendUpdates, std::size(sendUpdates));
         if (task->onSendComplete) { task->onSendComplete(); }
     }
 
@@ -377,18 +383,17 @@ bool TransportTaskExecutor::Poll(const TransportTaskPtr& task)
     if (!task) { return false; }
 
     bool done = false;
-    bool recordCompletionBreakdown = false;
-    double responseWaitSeconds = 0.0;
-    double finalizeSeconds = 0.0;
     {
         std::lock_guard<std::mutex> lock(task->mutex);
-        std::chrono::steady_clock::time_point finalResponseObservedAt{};
         if (task->state.load(std::memory_order_acquire) != TransportTaskState::INFLIGHT) {
             return false;
         }
         if (task->subBatchContexts->empty()) { return false; }
 
         if (std::chrono::steady_clock::now() >= task->deadline) {
+            const metrics::MetricUpdate update{
+                KV_METRIC("kv_transport_task_completion_timeouts_total"), 1.0};
+            metrics::UpdateStats(&update, 1);
             const auto timeoutStatus =
                 Status::Error(StatusCode::TIMEOUT, "transport task execution timeout");
             std::fill(task->entryStatus.begin(), task->entryStatus.end(), timeoutStatus);
@@ -423,10 +428,6 @@ bool TransportTaskExecutor::Poll(const TransportTaskPtr& task)
                 }
                 if (completedCid == 0 || completedCid != subBatchContext.cid) { continue; }
 
-                if (task->remainingSubBatchCount == 1) {
-                    finalResponseObservedAt = std::chrono::steady_clock::now();
-                }
-
                 KvResponse response;
                 const auto batchNumber =
                     static_cast<std::uint16_t>(subBatchContext.entryStatus.size());
@@ -448,6 +449,11 @@ bool TransportTaskExecutor::Poll(const TransportTaskPtr& task)
                                         : subBatchContext.status;
                 if (status.code == StatusCode::CQE_INTERNAL_ERROR ||
                     status.code == StatusCode::CQE_IO_TIMEOUT) {
+                    if (status.code == StatusCode::CQE_IO_TIMEOUT) {
+                        const metrics::MetricUpdate update{
+                            KV_METRIC("kv_transport_task_io_timeouts_total"), 1.0};
+                        metrics::UpdateStats(&update, 1);
+                    }
                     connManager_->ReportFailure(subBatchContext.channel);
                 } else {
                     connManager_->ReportSuccess(subBatchContext.channel);
@@ -457,22 +463,6 @@ bool TransportTaskExecutor::Poll(const TransportTaskPtr& task)
             task->TryFinalizeFromSubBatches();
         }
         done = task->Done();
-        if (done && finalResponseObservedAt != std::chrono::steady_clock::time_point{}) {
-            const auto completedAt = std::chrono::steady_clock::now();
-            responseWaitSeconds =
-                std::chrono::duration<double>(finalResponseObservedAt - task->sendCompletedAt)
-                    .count();
-            finalizeSeconds =
-                std::chrono::duration<double>(completedAt - finalResponseObservedAt).count();
-            recordCompletionBreakdown = true;
-        }
-    }
-    if (recordCompletionBreakdown) {
-        const metrics::MetricUpdate updates[] = {
-            {KV_METRIC("kv_transport_task_response_wait_duration_seconds"),       responseWaitSeconds},
-            {KV_METRIC("kv_transport_task_completion_finalize_duration_seconds"), finalizeSeconds    },
-        };
-        metrics::UpdateStats(updates, std::size(updates));
     }
     return done;
 }

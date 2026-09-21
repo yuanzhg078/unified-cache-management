@@ -78,7 +78,6 @@ private:
         std::vector<std::uint32_t> request;
         std::uint64_t requestLength{0};
         std::uint32_t* flagBuffer{nullptr};
-        std::chrono::steady_clock::time_point enqueuedAt{};
     };
 
     class WorkerPool;
