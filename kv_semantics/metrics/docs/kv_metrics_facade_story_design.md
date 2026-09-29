@@ -51,7 +51,7 @@ flowchart LR
     CFG["部署配置"] --> U5["缺失点位或禁用指标"]
 ```
 
-场景是外部使用方式；以下三个 Shard 按生命周期、写入转换、指标出口职责划分，不与场景一一对应。
+场景是外部使用方式。设计划分为第 5～8 章的四个 Shard，分别负责统一写入入口、Standalone 完整链路、UCM 完整链路，以及两种模式共同使用的指标定义和查询模板。
 
 ### 3.3 场景分析
 
@@ -65,13 +65,13 @@ flowchart LR
 
 ### 3.4 场景与 Shard 映射
 
-| 场景 | backend 生命周期 | KV 指标写入路径 | 定义与导出契约 |
-| --- | --- | --- | --- |
-| 独立启动和抓取 | 主责 | 接收业务更新 | 提供 standalone 描述与抓取 |
-| UCM 启动和抓取 | 主责 | 转发至 UCM | UCM 注册与 consumer 主责 |
-| 业务批量打点 | 提供当前 backend | 主责 | 确定类型与单位 |
-| 关闭与最终快照 | 主责 | 停止写入 | 完成最终可观察结果 |
-| 缺失点位或禁用指标 | 禁用时保持 no-op | 未注册时跳过 | 主责 |
+| 场景 | KV I/O 性能指标统一写入与 backend 生命周期管理 | Standalone 模式的 KV I/O 性能指标采集、聚合与导出 | UCM 模式的 KV I/O 性能指标适配、注册与导出 | 跨模式 KV 指标定义与 Grafana 查询模板管理 |
+| --- | --- | --- | --- | --- |
+| 独立启动和抓取 | 提供统一写入入口 | 主责：安装、聚合与 HTTP 导出 | 不参与 | 提供指标定义及公共查询口径 |
+| UCM 启动和抓取 | 提供统一写入入口 | 不参与 | 主责：adapter、注册与 Python 导出 | 校验 UCM 注册定义及查询口径 |
+| 业务批量打点 | 主责：句柄与单点/批量接口 | 解析 slot 并写入线程 buffer | 转发到原生 UCM 句柄 | 约定类型、单位和 bucket |
+| 关闭与最终快照 | 约束停写后关闭 | 最终聚合并停止 HTTP 服务 | 停止 adapter，由 dispatcher 管理 drain | 约定累计结果的比较方式 |
+| 缺失点位或禁用指标 | 禁用时保持 no-op | 报告 standalone 定义错误 | 报告 UCM 点位缺口 | 主责：配置一致性检查 |
 
 ## 4. Story 设计描述
 
@@ -246,7 +246,7 @@ classDiagram
     SlotBinding ..|> Binding
 ```
 
-图中只列影响指标写入、聚合和导出的关键成员与接口。类型简写对应关系为：`MetricDescriptorList` 是 `const std::vector<MetricDescriptor>&`，`MetricDescriptorVector` 是 `std::vector<MetricDescriptor>`，`MetricIdMap` 是 `std::unordered_map<std::string, std::size_t>`，`ThreadBufferList` 是 `std::vector<std::shared_ptr<ThreadBuffer>>`，`MetricStateVector` 是 `std::vector<MetricState>`；`CollectorOwner`、`ServerOwner` 和 `BindingOwner` 分别是相应对象的 `std::unique_ptr`，`AtomicBindingPtr` 是 `std::atomic<Binding*>`。方法签名省略了成员函数自身的 `const` 和 `noexcept` 修饰。Standalone backend 独占 collector 和 HTTP server；collector 持有各业务线程共享的 `ThreadBuffer`，将增量聚合到 `snapshot_`。collector 在首次遇到 KV 句柄时创建 `SlotBinding`，由 `CachedMetric` 持有并缓存对应的 slot；HTTP server 通过 `registry_` 引用 collector，读取累计快照。图中的 `Binding` 对应代码中的 `CachedMetric::Binding`。
+图中只列影响指标写入、聚合和导出的关键成员与接口。类型简写对应关系为：`MetricDescriptorList` 是 `const std::vector<MetricDescriptor>&`，`MetricDescriptorVector` 是 `std::vector<MetricDescriptor>`，`MetricIdMap` 是 `std::unordered_map<std::string, std::size_t>`，`ThreadBufferList` 是 `std::vector<std::shared_ptr<ThreadBuffer>>`，`MetricStateVector` 是 `std::vector<MetricState>`；`CollectorOwner`、`ServerOwner` 和 `BindingOwner` 分别是相应对象的 `std::unique_ptr`，`AtomicBindingPtr` 是 `std::atomic<Binding*>`。方法签名省略了成员函数自身的 `const` 和 `noexcept` 修饰。Standalone backend 独占 collector 和 HTTP server；collector 持有各业务线程共享的 `ThreadBuffer`，将增量聚合到 `snapshot_`。collector 在首次遇到 KV 句柄时创建 `SlotBinding`，由 `CachedMetric` 持有并缓存对应的 slot；HTTP server 通过 `registry_` 引用 collector，读取累计快照。这里的 `-->` 是 Mermaid 对关联（Association）的表示，箭头指出 server 持有指向 collector 的引用；它不是另一种 UML 关系。图中的 `Binding` 对应代码中的 `CachedMetric::Binding`。
 
 **UCM 类图：**
 
@@ -527,133 +527,328 @@ sequenceDiagram
 2. KV `CachedMetric::Resolve` 首次创建 UCM binding，后续复用；原生 `CachedMetric` 自己维护注册 ID 和 epoch，晚注册时可重新解析。
 3. adapter 保留数组顺序与重复名称，每个 Histogram 条目仍是一个样本；不得先转为 `unordered_map`。原生接口可能抛出异常，adapter 的 `noexcept` 边界捕获并记录低频诊断，不影响 KV 请求。
 
-## 5. backend 选择与生命周期
+## 5. KV I/O 性能指标统一写入与 backend 生命周期管理
 
 ### 5.1 设计描述
 
-**Standalone**：`MetricsRuntime::Start` 仅在 `metrics.enabled=true` 时调用 `SetUpStandaloneMetrics`，并在 KV client 初始化前完成描述加载、聚合线程、HTTP server 启动及 facade 安装。`clientRunner.Shutdown()` 等待 KV 工作结束后，`MetricsRuntime::Stop` 执行最后一次 `Flush()`，按配置保留抓取窗口，随后调用 `Shutdown()`。
+KV client/transport 通过 `KV_METRIC` 构造 `CachedMetric`，再经 `kv::metrics::UpdateStats` 的单点或批量入口提交 Counter 增量和 Histogram 样本。facade 只负责把更新交给进程内已安装的 backend；没有 backend 时更新为 no-op，不改变 KV 请求结果。`CachedMetric::Resolve()` 在首次写入时缓存 backend 专属 binding，后续更新复用该 binding。因此同一进程只安装一种 backend，不在句柄已经绑定后切换 standalone 与 UCM。
 
-**UCM**：UCM worker 将有效的 `enable_metrics` 决策传给 AsuStore。启用时，由 worker 级协调器在首个 AsuStore 的 `KvClient::Init()` 前安装一次 UCM adapter；禁用时不安装。多个 AsuStore 实例共享该 backend，单个实例 Setup 失败或析构只释放其使用引用，不关闭全局 backend。worker 停止全部 KV 工作线程后，由该协调器调用一次 facade `Shutdown()`；它不得调用 UCM collector 的 drain 或关闭接口。
-
-worker 级一次安装也是 `CachedMetric` 当前没有 binding generation 的要求：AsuStore 在同一 worker 中反复创建时，不执行“关闭后重装”。若宿主允许卸载 AsuStore 动态库，必须先完成上述停写和 facade 关闭，再执行 `dlclose`，避免 backend 虚函数指向已卸载代码。
+backend 的创建、安装和关闭由宿主负责。安装发生在 KV 工作开始前；所有可能打点的业务线程退出后，宿主才调用 facade `Shutdown()`。这个顺序保证无所有权的热路径指针 `gBackendFast` 在写入期间仍指向有效 backend。两种宿主的具体启动和停止步骤分别见第 6、7 章。
 
 ### 5.2 重点实现接口
 
-`bool InstallBackend(std::shared_ptr<KvMetricsBackend> backend, std::string* error = nullptr)`：入参为非空 backend 与可选错误输出；成功发布唯一 backend，已有 backend 或空指针时返回 `false` 和错误，不替换旧对象。该接口为现有 facade API。
+backend 安装接口，用于发布进程内唯一的 KV metrics backend。
 
-`bool SetUpStandaloneMetrics(StandaloneMetricsConfig config, std::string* error = nullptr)`：加载定义并启动 standalone collector/exporter，然后安装到 facade；失败返回 `false` 并清理本次已启动资源。该接口已存在。
+入参：待安装的 `backend`，以及可选的错误输出指针 `error`。
 
-`std::shared_ptr<KvMetricsBackend> CreateUcmKvMetricsAdapter()`：创建只写入 `UC::Metrics` 的 backend；不启动 Python consumer，也不注册点位。调用方持有返回对象直到交给 `InstallBackend`。
+出参：安装成功返回 `true`；backend 为空或进程中已安装 backend 时返回 `false`，填写错误信息且保留原 backend。
 
-`void Flush()` / `void Shutdown()`：现有 facade API；standalone 的 `Flush` 聚合增量，`Shutdown` 清理 server/collector。UCM adapter 的对应操作为空；`Shutdown` 只能由确认 KV 停写且拥有 backend 生命周期的宿主调用。
+```cpp
+bool InstallBackend(std::shared_ptr<KvMetricsBackend> backend,
+                    std::string* error = nullptr);
+```
+
+单点更新接口，用于把一个 KV 指标值转交当前 backend。
+
+入参：指标句柄 `metric` 和更新值 `value`。
+
+出参：无；未安装 backend 时直接返回，指标更新不改变 KV 请求结果。
+
+```cpp
+void UpdateStats(CachedMetric& metric, double value) noexcept;
+```
+
+批量更新接口，用于按数组顺序提交多条指标事件。
+
+入参：更新数组 `updates` 和元素数量 `count`。
+
+出参：无；数组为空、数量为零或元素中的句柄为空时跳过相应更新，同名事件分别计入结果。
+
+```cpp
+void UpdateStats(const MetricUpdate* updates, std::size_t count) noexcept;
+```
+
+标签注册接口，用于将名称和标签组合交给当前 backend 处理。
+
+入参：指标基础名称 `name` 和标签集合 `labels`。
+
+出参：注册成功返回 `true`；未安装 backend 或当前 backend 不支持该标签组合时返回 `false`。
+
+```cpp
+bool RegisterMetricLabels(const std::string& name,
+                          const MetricLabels& labels) noexcept;
+```
+
+刷新接口，用于要求当前 backend 合并已完成的增量。
+
+入参：无。
+
+出参：无；未安装 backend 时直接返回。
+
+```cpp
+void Flush();
+```
+
+关闭接口，用于移除当前 backend，并依次调用其 `Flush()` 与 `Stop()`；宿主须先确保所有 KV 写入线程已退出。
+
+入参：无。
+
+出参：无；未安装 backend 时直接返回。
+
+```cpp
+void Shutdown();
+```
 
 ### 5.3 重点依赖接口
 
 | 依赖接口 | 用途 | 失败处理 |
 | --- | --- | --- |
-| `StandaloneKvMetricsBackend::Initialize(...)` | 启动 standalone 采集和 HTTP | 失败时停止已启动资源，不调用 `InstallBackend` |
-| `KvClient::Init()` / `Shutdown()` | 使 metrics 生命周期覆盖 KV 工作 | 初始化失败释放本实例引用；关闭时先等待业务线程退出 |
-| `UC::Metrics` 共享库加载 | 保证 adapter 与 Python consumer 共用 collector | 安装包检查 RPATH/SONAME；不满足时视为部署失败 |
+| `CachedMetric::Resolve(factory)` | 首次创建并发布 backend 专属 binding | 创建失败被 backend 的 `noexcept` 边界处理，跳过本次指标更新 |
+| `KvClient::Init()` / `Shutdown()` | 让指标安装覆盖 KV 工作区间 | 初始化失败清理本次资源；关闭时先等待业务线程退出 |
 
 ### 5.4 关键约束与验收
 
 | 约束 | 验收方式与预期结果 |
 | --- | --- |
-| 全进程同时只有一个 KV backend | 连续安装两次，第二次返回 `false`，第一次仍可接收更新 |
-| 未启用指标时保持 no-op | 不安装 backend；`IsEnabled()==false`，业务调用不产生 collector/HTTP 副作用 |
-| 停写先于销毁 | 并发业务线程全部 join 后再 `Shutdown`；无悬挂访问或丢失最后已完成更新 |
-| 当前版本不重装/切换 backend | 测试或宿主不在同一进程复用已绑定句柄跨模式；若将来需要，先设计 binding generation |
-| AsuStore 多实例共用一次安装 | 并发 Setup 后 facade 仍只有一个 adapter，单实例销毁不影响其余实例 |
+| 一个进程同时只有一个 backend | 连续安装两次，第二次返回 `false`，第一次仍可接收更新 |
+| 禁用时保持 no-op | 不安装 backend；`IsEnabled()==false`，打点不影响 KV 请求结果 |
+| 停写先于销毁 | 所有写入线程 join 后再 `Shutdown()`，不发生悬挂访问或丢失最后已完成的更新 |
+| 句柄不跨 backend 复用 | 同一进程不关闭后重装另一模式；若将来支持切换，需先增加 binding generation |
+| 批量更新保留每条事件 | 对同一 Counter 提交两条增量得到两值之和；对同一 Histogram 提交两条样本，`_count` 增加 2 |
 
-## 6. KV 指标写入路径
+## 6. Standalone 模式的 KV I/O 性能指标采集、聚合与导出
 
 ### 6.1 设计描述
 
-KV client/transport 在两种模式中都使用已有 `KV_METRIC`、`CachedMetric` 和 `MetricUpdate`，但句柄的 binding 与最终 collector 不同：
+`kv-test` 在 `metrics.enabled=true` 时，由 `MetricsRuntime::Start` 调用 `SetUpStandaloneMetrics()`。backend 加载 KV YAML 或内嵌默认描述，注册指标名称、类型、bucket 与可用标签，启动聚合线程及 HTTP 服务，最后安装到 facade；初始化失败时清理本次资源，不发布半初始化 backend。
 
-- **Standalone**：`CachedMetric::Resolve()` 首次查找由 KV YAML/default descriptor 注册的名称与标签组合，缓存 `SlotBinding`。业务线程进入本线程的双 buffer，数组批量共用一次 `WriteGuard`；聚合线程负责把增量合入累计快照。
-- **UCM**：adapter 在 KV 句柄中缓存 `UcmMetricBinding`，其中持有原生 `UC::Metrics::CachedMetric`。数组逐项调用原生单点更新；原生句柄的 `registerEpoch_` 可在点位晚注册后重试解析。adapter 不缓存数值，不建立第二套 exporter。
+业务更新经 facade 进入 `StandaloneKvMetricsBackend`。collector 在 `CachedMetric` 首次写入时解析名称和标签，创建 `SlotBinding` 并缓存 slot；批量更新在业务线程的双 buffer 中共用一次 `WriteGuard`。聚合线程把增量合入进程级累计快照，HTTP `/metrics` 读取该快照，重复抓取不会清零。`TransportTaskExecutor` 的节点级 Histogram 在该路径保留已注册的 `node_id` 标签。
 
-`TransportTaskExecutor` 的两项 node 级 Histogram 使用 `MetricLabels{{"node_id", ...}}`。现有 UCM collector 只有按基础名称的键，不支持把标签穿透到 Python；首版 UCM adapter 把它们聚合到基础名称下，`RegisterMetricLabels` 返回 `false`，明确不承诺 UCM 保留 `node_id`。若 node 维度是上线要求，需作为另一个扩展设计修改 UCM collector、drain 数据结构和 Python exporter，不在此 Story 的首版验收内。
+退出时，`clientRunner.Shutdown()` 先等待 KV 工作完成，`MetricsRuntime::Stop` 再执行最终 `Flush()`，按配置保留抓取窗口后调用 facade `Shutdown()`，停止 HTTP 服务和聚合线程。
 
 ### 6.2 重点实现接口
 
-`void UpdateStats(CachedMetric& metric, double value) noexcept`：现有 facade 入口。KV 句柄和值为入参，无返回值；无 backend 时直接返回，backend 异常不能越过 `noexcept` 边界。
+Standalone 指标启动接口，用于加载定义、启动 collector 与 HTTP 服务，并将 backend 安装到 facade。
 
-`void UpdateStats(const MetricUpdate* updates, std::size_t count) noexcept`：现有批量入口。数组可含同名多条更新，保持顺序；空数组、零长度或数组内空指针不产生更新。UCM adapter 的 override 实现逐条转发。
+入参：监听地址、端口、定义文件和聚合周期等配置 `config`，以及可选的错误输出指针 `error`。
 
-`bool RegisterMetricLabels(const std::string& name, const MetricLabels& labels) noexcept`：现有 facade 入口。standalone 用于注册名称/标签组合；UCM adapter 返回 `false`，表示当前 UCM 路径不支持该标签注册。
+出参：全部组件初始化并安装成功时返回 `true`；定义无效、监听失败或安装冲突时返回 `false` 和错误信息，并清理本次创建的资源。
+
+```cpp
+bool SetUpStandaloneMetrics(StandaloneMetricsConfig config,
+                            std::string* error = nullptr);
+```
+
+backend 初始化接口，用于按指标描述注册点位，并启动聚合线程和 HTTP 服务。
+
+入参：已加载的指标描述集合 `descriptors`。
+
+出参：成功返回 `true`；任一点位注册或服务启动失败时返回 `false`，错误可由 `LastError()` 获取，已启动资源由 backend 清理。
+
+```cpp
+bool StandaloneKvMetricsBackend::Initialize(
+    const std::vector<MetricDescriptor>& descriptors);
+```
+
+Standalone 批量写入接口，用于将 facade 转发的事件写入业务线程的双 buffer；单点写入由同类重载构造一条 `MetricUpdate` 后复用该路径。
+
+入参：更新数组 `updates` 和元素数量 `count`。
+
+出参：无；空数组和空句柄被跳过，采集异常不向 KV 业务传播。
+
+```cpp
+void StandaloneKvMetricsBackend::UpdateStats(
+    const MetricUpdate* updates, std::size_t count) noexcept;
+```
+
+Standalone 聚合与停止接口，用于在停写后合并最后一轮增量，再停止 HTTP 服务和聚合线程。
+
+入参：无。
+
+出参：无；重复停止不再释放已清理的资源。宿主通过第 5.2 节的 facade `Flush()`、`Shutdown()` 触发它们。
+
+```cpp
+void StandaloneKvMetricsBackend::Flush();
+void StandaloneKvMetricsBackend::Stop();
+```
 
 ### 6.3 重点依赖接口
 
 | 依赖接口 | 用途 | 失败处理 |
 | --- | --- | --- |
-| `CachedMetric::Resolve(factory)` | 首次发布 backend 专属 binding | 创建失败由 adapter 捕获，跳过本次 metrics 更新 |
-| `UC::Metrics::UpdateStats(UC::Metrics::CachedMetric&, double)` | 写入 UCM 原生线程 buffer | 未初始化/未注册时由原生实现跳过；异常在 adapter 捕获 |
-| `ThreadBufferedMetricsCollector::UpdateStats(...)` | standalone 批量更新 | backend 内部处理采集异常，业务请求不受影响 |
+| `DefaultKvMetricDescriptors()` / KV YAML 加载 | 提供名称、类型、bucket 和标签定义 | 定义无效时启动失败并报告错误 |
+| `ThreadBufferedMetricsCollector::UpdateStats(...)` | 将业务线程增量写入本地 buffer | 采集异常在 backend 内处理，不影响 KV 请求 |
+| `MetricsHttpServer::Start()` / `Render()` | 提供累计 `/metrics` 快照 | 监听失败时撤销本次 backend 初始化 |
 
 ### 6.4 关键约束与验收
 
 | 约束 | 验收方式与预期结果 |
 | --- | --- |
-| 同名重复批量更新不合并 | 分别在两种 backend 下对同一 Counter 传两条更新，结果均为两值之和；Histogram `_count` 均增加 2 |
-| late registration 可生效 | 先对未注册原生名称打点，再 `CreateStats`，后续调用可以出现在 UCM drain 中 |
-| metrics 故障不改变 KV 结果 | 注入 binding 创建或原生更新异常，KV 请求状态保持原值且进程不终止 |
-| node 标签降级明确 | UCM 两个 node Histogram 按基础名汇总，`RegisterMetricLabels` 返回 `false`；standalone 仍按 `node_id` 输出 |
+| 注册和 HTTP 启动先于 facade 安装 | 用坏 YAML 或预占端口启动，返回错误且 facade 未启用、无残留线程 |
+| 抓取是累计快照 | 固定次数更新后连续抓取，Counter 不清零，Histogram `_count` 与样本数一致 |
+| 停止前执行最终聚合 | 工作线程退出后 `Flush()`，最后已完成的更新在抓取窗口可见 |
+| 节点标签可用 | 注册两个 `node_id` 后写入节点级 Histogram，抓取结果按节点区分 |
 
-## 7. 指标定义与出口兼容
+## 7. UCM 模式的 KV I/O 性能指标适配、注册与导出
 
 ### 7.1 设计描述
 
-`kv_semantics/metrics/config/kv_metrics.yaml` 是 KV 点位基础名、类型和 Histogram bucket 的规范清单；`generate_kv_metrics.py` 从该文件生成 standalone 内嵌默认描述。UCM 启动时的 `setup_ucm_metrics` 只注册实际配置提供的点位。KV 定义同时维护在 `ucm/default_metrics_config.py` 与部署模板中，CI 检查基础名称、类型和 bucket 是否一致；构建过程不改写用户配置。用户自定义 YAML 若覆盖默认配置，也必须包含所需 KV 点位，否则原生 collector 会忽略更新。
+UCM worker 将有效的 `enable_metrics` 决策传给 AsuStore。启用时，worker 级协调器在首个 `KvClient::Init()` 前创建并安装一次 UCM adapter；禁用时不安装。多个 AsuStore 实例共享该 backend，单个实例初始化失败或析构不关闭全局 backend。worker 停止全部 KV 工作线程后才调用一次 facade `Shutdown()`；如果允许卸载 AsuStore 动态库，还须在 `dlclose` 前完成停写和关闭。
 
-两种出口的默认前缀不同：standalone 默认 `kv:`，UCM multiproc exporter 默认 `ucm:`。公共查询使用 `ucm:` 前缀，`kv-test` 通过配置采用该前缀，并提供稳定的 `model_name/worker_id` 标签；UCM Python logger 也提供这两个标签。`source` 不属于两端的公共契约。Counter/Histogram 出口比较以最终累计 Prometheus 值为准：standalone `/metrics` 是累计快照，UCM C++ drain 返回增量。
+adapter 在 KV `CachedMetric` 中缓存 `UcmMetricBinding`，其中持有原生 `UC::Metrics::CachedMetric`。单点和批量更新将原始值逐项转发到 UCM collector；原生句柄通过注册 epoch 在点位晚注册后重新解析。adapter 不创建第二套 exporter，也不调用 `CreateStats()` 或 `GetAllStatsAndClear()`。UCM Python `setup_ucm_metrics()` 从实际生效配置注册 KV 点位；`MetricsDispatcher` 是该 collector 的统一 drain 点，Python consumer 累积增量后对外提供可抓取指标。
 
-仓库提供 `examples/metrics/grafana_kv_client.json` 作为 KV client 性能面板模板，覆盖吞吐、阶段耗时、错误与超时等视图。模板查询需要与两种出口的公共指标名称及前缀保持一致；依赖 `node_id` 的节点维度面板仅适用于保留该标签的 standalone 路径，UCM 路径以不含 `node_id` 的汇总指标展示。Grafana 模板的维护和查询验证属于本 Story 的交付范围。
+现有 UCM collector 按基础名称索引，不能保留 KV 的动态 `node_id` 标签。adapter 将两项节点级 Histogram 汇总到基础名称下，`RegisterMetricLabels()` 返回 `false`；节点维度的扩展需要同时修改原生 collector、drain 数据结构和 Python exporter。
 
 ### 7.2 重点实现接口
 
-`DefaultKvMetricDescriptors()`：由生成头提供 standalone 默认描述；KV YAML 是生成输入。`generate_kv_metrics.py --check` 比较 UCM 默认配置和部署模板中的基础名称、类型、Histogram buckets 与 HELP 语义；前缀不写入 C++ 句柄名。
+UCM adapter 创建接口，用于提供只写入原生 `UC::Metrics` collector 的 backend；点位注册和 Python 导出由 UCM 侧完成。
 
-`setup_ucm_metrics(config: dict) -> list[MetricDefinition]`：UCM 现有 Python 接口，调用 `ucmmetrics.set_up/create_stats` 注册实际生效的配置；空定义返回空列表。adapter 不调用它。
+入参：无。
 
-`MetricsDispatcher.drain_to_consumers() -> None`：UCM 现有 Python 接口，唯一读取 `GetAllStatsAndClear` 并分发到启用的 consumer；adapter 不调用它。
+出参：可交给 `InstallBackend()` 的 backend 对象；对象创建失败时宿主不得安装空 backend。
+
+```cpp
+std::shared_ptr<KvMetricsBackend> CreateUcmKvMetricsAdapter();
+```
+
+UCM 单点写入接口，用于将一个 KV 句柄绑定到原生 `UC::Metrics::CachedMetric`，并提交更新值。
+
+入参：KV 指标句柄 `metric` 和更新值 `value`。
+
+出参：无；未注册点位由原生 collector 跳过，adapter 内部处理写入异常，不改变 KV 请求结果。
+
+```cpp
+void UcmKvMetricsAdapter::UpdateStats(CachedMetric& metric,
+                                      double value) noexcept;
+```
+
+UCM 批量写入接口，用于按输入顺序把多条 KV 更新逐项转发给原生 collector。
+
+入参：更新数组 `updates` 和元素数量 `count`。
+
+出参：无；空数组和空句柄不产生更新，同名多条事件分别提交，异常不越过 `noexcept` 边界。
+
+```cpp
+void UcmKvMetricsAdapter::UpdateStats(
+    const MetricUpdate* updates, std::size_t count) noexcept;
+```
+
+UCM 指标注册接口，用于读取实际生效配置，将其中的 KV 点位注册到原生 collector。
+
+入参：UCM 指标配置 `config`，允许为 `None`。
+
+出参：实际注册的 `MetricDefinition` 列表；配置没有点位时返回空列表，配置解析或注册失败时向调用方报告错误。
+
+```text
+setup_ucm_metrics(config: dict[str, Any] | None) -> list[MetricDefinition]
+```
+
+UCM 指标分发接口，用于统一 drain 原生 collector，并将本轮增量合并到已启用 consumer 的缓冲区。
+
+入参：无。
+
+出参：无；本轮没有指标时直接返回，不启动第二个原生 drain 点。
+
+```text
+MetricsDispatcher.drain_to_consumers() -> None
+```
 
 ### 7.3 重点依赖接口
 
 | 依赖接口 | 用途 | 失败处理 |
 | --- | --- | --- |
-| `generate_kv_metrics.py --check` | 校验 standalone 默认描述，以及 UCM 默认配置/模板的一致性 | 构建/CI 报错，停止交付漂移定义 |
-| `UC::Metrics::CreateStats(name, type, buckets)` | 注册原生 UCM 点位 | 配置缺失时该名称不出现，部署检查报告缺口 |
-| `PrometheusStatsLogger.update_stats_loop()` | 将 UCM delta 累积到 Prometheus 对象 | consumer 未运行时检查启动配置与 worker 进程位置 |
+| `UC::Metrics::UpdateStats(UC::Metrics::CachedMetric&, double)` | 写入原生线程 buffer | 未注册名称被跳过；异常由 adapter 截断 |
+| `UC::Metrics::CreateStats(name, type, buckets)` | 在实际生效配置中注册 KV 点位 | 配置缺失时由部署检查报告缺口 |
+| `PrometheusStatsLogger.update_stats_loop()` | 将 dispatcher 分发的增量累积成 Prometheus 值 | consumer 未运行时检查启动配置和 worker 位置 |
+| `libucm_metrics.so` 加载 | 保证 adapter 写入与 Python drain 使用同一 collector | 检查进程加载映射；重复实例视为部署失败 |
 
 ### 7.4 关键约束与验收
 
 | 约束 | 验收方式与预期结果 |
 | --- | --- |
-| 两端同名指标类型/单位/bucket 一致 | 自动配置比对；在验证用配置中改变一个 bucket 或类型，CI 必须报错 |
-| 前缀只在 exporter 增加 | 两端抓取均出现 `ucm:kv_...`，C++ 句柄仍使用 `kv_...` |
-| UCM 只有统一 dispatcher drain | 同一 worker 不启动第二个 `GetAllStatsAndClear` 消费者；多 consumer 均可收到同一轮增量 |
-| Histogram bucket 与 Python 对象匹配 | 注入一条样本，最终 `_bucket/_sum/_count` 一致，无 bucket mismatch 日志 |
-| KV client Grafana 模板兼容两种出口 | 导入 `grafana_kv_client.json`，分别连接 standalone 和 UCM 指标源；公共吞吐、耗时、错误面板均可查询，节点维度面板只在 standalone 场景显示数据 |
+| 多实例只安装一次 adapter | 并发初始化两个 AsuStore，一个失败或退出后另一个继续出数，最终仅关闭一次 |
+| 晚注册后恢复写入 | 先更新未注册名称，再 `CreateStats()` 并更新，后一次在 UCM drain 中可见 |
+| 原生 collector 只有 dispatcher drain | 不启动第二个 `GetAllStatsAndClear()` 消费者，多 consumer 收到同一轮增量 |
+| Histogram 类型和 bucket 与 Python 对象匹配 | 注入样本后最终 `_bucket/_sum/_count` 一致，无 bucket mismatch 日志 |
+| 节点标签降级明确 | 两个节点的样本按基础名汇总，UCM 输出不包含 `node_id` |
+| 同一共享库实例 | 加载映射中 `libkv_metrics.so`、`libucm_metrics.so` 各只有一份实例 |
 
-## 8. Shard 协作关系与 Story 级约束
+## 8. 跨模式 KV 指标定义与 Grafana 查询模板管理
+
+### 8.1 设计描述
+
+`kv_semantics/metrics/config/kv_metrics.yaml` 是 KV 点位基础名、类型、单位和 Histogram bucket 的规范清单；`generate_kv_metrics.py` 从该文件生成 standalone 内嵌默认描述。UCM 默认配置与部署 YAML 维护同一批 KV 定义；`generate_kv_metrics.py --check` 在 CI 中比较名称、类型、bucket 与 HELP 语义。自定义 UCM YAML 覆盖默认配置时也必须包含所需 KV 点位，否则原生 collector 会忽略对应更新。
+
+standalone 默认前缀为 `kv:`，UCM multiproc exporter 默认前缀为 `ucm:`。公共查询采用 `ucm:`，`kv-test` 配置该前缀及稳定的 `model_name/worker_id` 标签；UCM Python logger 提供对应标签。前缀只在 exporter 添加，C++ 句柄仍使用 `kv_...` 基础名。两种出口的对照以最终累计 Prometheus 值为准：standalone `/metrics` 直接返回累计快照，UCM C++ drain 返回增量，由 Python consumer 累积。`source` 不属于公共契约。
+
+`examples/metrics/grafana_kv_client.json` 是本 Story 的 KV 性能面板模板，查询需与公共名称和前缀一致。吞吐、耗时、错误等公共面板适用于两种出口；依赖 `node_id` 的节点面板只适用于 standalone，UCM 通过无节点标签的汇总指标展示。
+
+### 8.2 关键交付物与校验入口
+
+默认指标描述接口，用于向 standalone backend 提供由 KV YAML 生成的点位定义。
+
+入参：无。
+
+出参：`MetricDescriptor` 列表，包含指标基础名称、类型、文档说明和 Histogram bucket。
+
+```cpp
+std::vector<MetricDescriptor> DefaultKvMetricDescriptors();
+```
+
+定义一致性校验入口，用于检查生成的 standalone 描述、UCM 默认配置和部署模板是否遵循同一指标契约。
+
+入参：仓库中的 KV YAML、生成头文件和 UCM 指标配置。
+
+出参：定义一致时退出码为 `0`；基础名称、类型、bucket 或说明不一致时返回非零退出码并报告差异。
+
+```text
+python kv_semantics/metrics/tools/generate_kv_metrics.py --check
+```
+
+Grafana 模板交付物，用于提供 KV client 的吞吐、阶段耗时、错误、超时和节点性能视图。
+
+入参：已配置的 Prometheus 数据源及两种出口遵循的公共指标名称。
+
+出参：可导入的 KV client dashboard；公共面板适用于两种模式，依赖 `node_id` 的节点面板仅在 standalone 下有节点级数据。
+
+```text
+examples/metrics/grafana_kv_client.json
+```
+
+### 8.3 重点依赖接口
+
+| 依赖接口 | 用途 | 失败处理 |
+| --- | --- | --- |
+| Standalone HTTP `/metrics` | 提供累计 Prometheus 快照 | 查询缺失时检查定义、前缀及标签配置 |
+| UCM Python metrics endpoint | 提供由 dispatcher 增量累积后的指标 | 查询缺失时检查 UCM 注册配置和 consumer 状态 |
+| Grafana Prometheus 数据源 | 执行 KV client 模板中的 PromQL 查询 | 面板无数据时核对实际出口的名称、前缀和标签 |
+
+### 8.4 关键约束与验收
+
+| 约束 | 验收方式与预期结果 |
+| --- | --- |
+| 两种模式的基础名称、类型、单位和 bucket 一致 | 更改任一端的类型或 bucket，配置检查报告明确差异 |
+| 公共前缀只在 exporter 增加 | 两端抓取出现 `ucm:kv_...`，C++ 句柄仍使用 `kv_...` |
+| 两端结果按累计值比较 | 注入相同事件后，Counter 和 Histogram 的最终 Prometheus 值可比较 |
+| Grafana 模板覆盖两种出口 | 公共吞吐、耗时、错误面板在两种指标源下可查询；节点面板在 UCM 下不误示节点维度结果 |
+
+## 9. Shard 协作关系与 Story 级约束
 
 ```mermaid
 flowchart LR
-    S1["backend 生命周期"] -->|"安装唯一 backend"| S2["KV 指标写入路径"]
-    S3["指标定义与出口"] -->|"提供注册表和类型语义"| S2
-    S2 -->|"写入 collector"| S3
-    S1 -->|"停写后最终聚合/关闭"| S3
+    F["KV I/O 指标统一写入<br/>与 backend 生命周期管理"] --> ST["Standalone 模式<br/>采集、聚合与导出"]
+    F --> UC["UCM 模式<br/>适配、注册与导出"]
+    DEF["跨模式指标定义<br/>与 Grafana 模板"] --> ST
+    DEF --> UC
 ```
 
-1. 安装先于 KV client/transport 开始打点；退出先停写，再关闭 backend。`gBackendFast` 是 raw pointer，不能用 `Shutdown` 与任意业务写入并发。
-2. KV client、transport 与宿主必须解析到同一份 `libkv_metrics.so`；UCM adapter 与 Python `ucmmetrics` 必须解析到同一份 `libucm_metrics.so`。用运行进程的加载映射验证，不只比对文件名。
-3. UCM adapter 只写原生 collector。`GetAllStatsAndClear()` 是破坏性 drain，归统一 dispatcher 使用。
-4. 首版不支持 facade backend 重装或切换。AsuStore 的安装协调要覆盖 worker 内的反复实例创建，进程退出或动态库卸载前再安全关闭。
-5. `MetricUpdate` 中的 `CachedMetric*` 至少存活到本次调用结束；异步任务中保存的节点级句柄不得早于该任务完成而析构。
+1. 每个进程只选择一条指标链路。安装先于打点，退出先停写再关闭；`gBackendFast` 不持有 backend 引用，`Shutdown()` 不得与业务更新并发。
+2. KV client、transport 与宿主解析到同一份 `libkv_metrics.so`；UCM adapter 和 Python `ucmmetrics` 解析到同一份 `libucm_metrics.so`，并通过进程加载映射验证。
+3. UCM adapter 只写原生 collector；具有清除语义的 `GetAllStatsAndClear()` 只由 dispatcher 调用。
+4. 不在一个进程中关闭后重装另一模式；AsuStore 的安装协调覆盖 worker 内反复创建的实例。
+5. `MetricUpdate` 中的 `CachedMetric*` 至少存活至调用结束；异步任务保存的节点级句柄不得早于任务完成而析构。
 
-## 9. SFMEA 分析
+## 10. SFMEA 分析
 
 | 故障模式 | 影响 | 设计措施 | 可执行注入方法 | 需验证的结果 |
 | --- | --- | --- | --- | --- |
@@ -667,9 +862,9 @@ flowchart LR
 | adapter 更新抛异常 | metrics 干扰 KV 请求或触发 terminate | adapter `noexcept` 边界捕获 | 注入 binding 分配/原生更新异常 | KV 请求结果不变，进程存活，低频诊断可见 |
 | AsuStore 多实例中一个失败或销毁 | 其他实例过早失去指标 | worker 级安装协调，不由单实例关闭全局 backend | 并发创建两实例，使其中一例 Setup 失败 | 成功实例持续打点，最终关闭仅一次 |
 
-## 10. 开发自验证用例
+## 11. 开发自验证用例
 
-### 10.1 Standalone 启动、抓取与退出
+### 11.1 Standalone 启动、抓取与退出
 
 测试点：backend 安装、累计输出和最终聚合。
 
@@ -677,7 +872,7 @@ flowchart LR
 
 预期行为：请求 Counter 单调不减，Histogram `_count` 等于实际样本数；多次抓取不清零；退出前最后一次 Flush 的结果可见。端口占用时启动返回失败且无后台线程残留。
 
-### 10.2 Facade 单例与无 backend 路径
+### 11.2 Facade 单例与无 backend 路径
 
 测试点：唯一 backend、禁用 no-op。
 
@@ -685,7 +880,7 @@ flowchart LR
 
 预期行为：未安装时 `IsEnabled()==false` 且调用无副作用；首次安装成功，第二次返回 `false` 并保留原 backend 的计数。
 
-### 10.3 UCM adapter 单点和重复批量
+### 11.3 UCM adapter 单点和重复批量
 
 测试点：名称绑定、Counter 累加和 Histogram 样本数。
 
@@ -693,7 +888,7 @@ flowchart LR
 
 预期行为：Counter 值准确，Histogram 两个样本分别进入 bucket、`sum` 和 `count`；数组内空句柄跳过，无异常传出。
 
-### 10.4 UCM 晚注册与缺失定义
+### 11.4 UCM 晚注册与缺失定义
 
 测试点：原生 cached handle 的 epoch 行为和配置诊断。
 
@@ -701,7 +896,7 @@ flowchart LR
 
 预期行为：注册前更新不出现，注册后的更新可被 drain；配置检查明确指出缺失名称。
 
-### 10.5 AsuStore 多实例与库唯一性
+### 11.5 AsuStore 多实例与库唯一性
 
 测试点：worker 级安装协调及同一 collector 实例。
 
@@ -709,7 +904,7 @@ flowchart LR
 
 预期行为：facade 只安装一次，成功实例持续出数，`libkv_metrics.so` 和 `libucm_metrics.so` 各仅一份加载实例；失败实例的释放不关闭全局 backend。
 
-### 10.6 两模式指标口径对照
+### 11.6 两模式指标口径对照
 
 测试点：基础名称、类型、单位、bucket、公共查询及 Grafana 模板一致性。
 
@@ -717,6 +912,6 @@ flowchart LR
 
 预期行为：非节点标签的 KV 指标按相同事件数输出，duration 均为 seconds，Histogram bucket 与 `_count/_sum` 一致；UCM 的两个 node Histogram 按基础名汇总且不出现 `node_id`，此差异明确列在设计契约中。
 
-## 11. 一句话总结
+## 12. 一句话总结
 
 > 本 Story 使 KV client I/O 路径的性能数据在独立运行和 UCM 集成场景下都可采集、可查看，并保持一致的指标口径。
