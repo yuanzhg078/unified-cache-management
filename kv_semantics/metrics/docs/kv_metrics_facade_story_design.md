@@ -178,8 +178,8 @@ classDiagram
     }
     class StandaloneKvMetricsBackend {
         -StandaloneMetricsConfig config_
-        -unique_ptr collector_
-        -unique_ptr server_
+        -CollectorOwner collector_
+        -ServerOwner server_
         -string error_
         +Initialize(descriptors: MetricDescriptorList) bool
         +UpdateStats(metric: CachedMetric&, value: double) void
@@ -190,12 +190,12 @@ classDiagram
         +LastError() const string&
     }
     class ThreadBufferedMetricsCollector {
-        -descriptors_
-        -generation_
-        -metricIds_
-        -buffers_
-        -snapshot_
-        -aggregator_
+        -MetricDescriptorVector descriptors_
+        -uint64_t generation_
+        -MetricIdMap metricIds_
+        -ThreadBufferList buffers_
+        -MetricStateVector snapshot_
+        -thread aggregator_
         +Register(descriptor: MetricDescriptor, error: string&) bool
         +RegisterMetricLabels(name: string, labels: MetricLabels) bool
         +StartAggregation(intervalMs: uint32_t) void
@@ -205,18 +205,18 @@ classDiagram
         +Render(prefix: string, labels: MetricLabels) string
     }
     class ThreadBuffer {
-        -slots[2]
-        -writeIndex
-        -activeWriteIndex
-        -retired
+        -DeltaSlot[2] slots
+        -atomic_int writeIndex
+        -atomic_int activeWriteIndex
+        -atomic_bool retired
         +SwitchWriteSlot() int
     }
     class MetricsHttpServer {
-        -registry_
+        -ThreadBufferedMetricsCollector& registry_
         -StandaloneMetricsConfig config_
-        -running_
-        -listenFd_
-        -worker_
+        -atomic_bool running_
+        -int listenFd_
+        -thread worker_
         +Start(error: string&) bool
         +Stop() void
     }
@@ -224,8 +224,8 @@ classDiagram
         -string name_
         -MetricLabels labels_
         -mutex mutex_
-        -unique_ptr owner_
-        -atomic binding_
+        -BindingOwner owner_
+        -AtomicBindingPtr binding_
         +Name() const string&
         +Labels() const MetricLabels&
         +Resolve(factory: Factory) Binding*
@@ -234,7 +234,7 @@ classDiagram
         <<interface>>
     }
     class SlotBinding {
-        -slot
+        -size_t slot
     }
     StandaloneKvMetricsBackend ..|> KvMetricsBackend
     StandaloneKvMetricsBackend *-- ThreadBufferedMetricsCollector
@@ -246,7 +246,7 @@ classDiagram
     SlotBinding ..|> Binding
 ```
 
-图中只列影响指标写入、聚合和导出的关键成员与接口。`MetricDescriptorList` 是排版简写，对应 `const std::vector<MetricDescriptor>&`；方法签名省略了成员函数自身的 `const` 和 `noexcept` 修饰。Standalone backend 独占 collector 和 HTTP server；collector 持有各业务线程共享的 `ThreadBuffer`，将增量聚合到 `snapshot_`。collector 在首次遇到 KV 句柄时创建 `SlotBinding`，由 `CachedMetric` 持有并缓存对应的 slot；HTTP server 通过 `registry_` 引用 collector，读取累计快照。图中的 `Binding` 对应代码中的 `CachedMetric::Binding`。
+图中只列影响指标写入、聚合和导出的关键成员与接口。类型简写对应关系为：`MetricDescriptorList` 是 `const std::vector<MetricDescriptor>&`，`MetricDescriptorVector` 是 `std::vector<MetricDescriptor>`，`MetricIdMap` 是 `std::unordered_map<std::string, std::size_t>`，`ThreadBufferList` 是 `std::vector<std::shared_ptr<ThreadBuffer>>`，`MetricStateVector` 是 `std::vector<MetricState>`；`CollectorOwner`、`ServerOwner` 和 `BindingOwner` 分别是相应对象的 `std::unique_ptr`，`AtomicBindingPtr` 是 `std::atomic<Binding*>`。方法签名省略了成员函数自身的 `const` 和 `noexcept` 修饰。Standalone backend 独占 collector 和 HTTP server；collector 持有各业务线程共享的 `ThreadBuffer`，将增量聚合到 `snapshot_`。collector 在首次遇到 KV 句柄时创建 `SlotBinding`，由 `CachedMetric` 持有并缓存对应的 slot；HTTP server 通过 `registry_` 引用 collector，读取累计快照。图中的 `Binding` 对应代码中的 `CachedMetric::Binding`。
 
 **UCM 类图：**
 
@@ -272,8 +272,8 @@ classDiagram
         -string name_
         -MetricLabels labels_
         -mutex mutex_
-        -unique_ptr owner_
-        -atomic binding_
+        -BindingOwner owner_
+        -AtomicBindingPtr binding_
         +Name() const string&
         +Labels() const MetricLabels&
         +Resolve(factory: Factory) Binding*
@@ -286,12 +286,12 @@ classDiagram
     }
     class UcCachedMetric {
         +string name
-        +atomic id
-        +atomic seenEpoch
+        +AtomicMetricId id
+        +atomic_uint64_t seenEpoch
     }
     class UcMetricsCollector {
-        -nameToId_
-        -registerEpoch_
+        -UcMetricIdMap nameToId_
+        -atomic_uint64_t registerEpoch_
         +CreateStats(name: string, type: string, buckets: HistogramBuckets) void
         +UpdateStats(nativeMetric: UcCachedMetric&, value: double) void
         +GetAllStatsAndClear() StatsSnapshot
@@ -305,7 +305,7 @@ classDiagram
     UcMetricsCollector ..> UcCachedMetric : resolves metric id
 ```
 
-`HistogramBuckets` 是 `const std::vector<double>&` 的排版简写；`StatsSnapshot` 表示 `UC::Metrics::Metrics::GetAllStatsAndClear()` 返回的 Counter、Gauge 与 Histogram 三元组。图中的方法签名省略了成员函数自身的 `const` 和 `noexcept` 修饰。KV `CachedMetric` 保存指标名称、标签和首次解析后缓存的 binding；其中 `owner_` 持有 binding，`binding_` 提供后续更新的快速访问。UCM adapter 本身不保存每个指标的状态，首次写入时创建 `UcmMetricBinding`，由它持有原生 `UC::Metrics::CachedMetric`（图中的 `UcCachedMetric`）。原生句柄保存名称、指标 ID 和注册 epoch；adapter 调用 `UC::Metrics::Metrics`（图中的 `UcMetricsCollector`）写入指标，不拥有该 collector。collector 与 Python exporter 的关系在 4.2 节逻辑模型中展示。
+`BindingOwner` 对应 `std::unique_ptr<Binding>`，`AtomicBindingPtr` 对应 `std::atomic<Binding*>`，`UcMetricIdMap` 对应 `std::unordered_map<std::string, UC::Metrics::MetricId>`，`AtomicMetricId` 对应 `std::atomic<UC::Metrics::MetricId>`；`HistogramBuckets` 是 `const std::vector<double>&` 的排版简写，`StatsSnapshot` 表示 `UC::Metrics::Metrics::GetAllStatsAndClear()` 返回的 Counter、Gauge 与 Histogram 三元组。图中的方法签名省略了成员函数自身的 `const` 和 `noexcept` 修饰。KV `CachedMetric` 保存指标名称、标签和首次解析后缓存的 binding；其中 `owner_` 持有 binding，`binding_` 提供后续更新的快速访问。UCM adapter 本身不保存每个指标的状态，首次写入时创建 `UcmMetricBinding`，由它持有原生 `UC::Metrics::CachedMetric`（图中的 `UcCachedMetric`）。原生句柄保存名称、指标 ID 和注册 epoch；adapter 调用 `UC::Metrics::Metrics`（图中的 `UcMetricsCollector`）写入指标，不拥有该 collector。collector 与 Python exporter 的关系在 4.2 节逻辑模型中展示。
 
 两张图的 `CachedMetric` 都指 `kv::metrics::CachedMetric`，但它在一个进程中只拥有一种具体 binding。facade 的全局 `shared_ptr<KvMetricsBackend>` 持有所选 backend，`gBackendFast` 是无所有权的热路径指针；宿主如何安装 backend 见 4.4 节上下文模型。当前设计不支持先用 standalone 解析句柄、再切换成 UCM adapter 复用该句柄。
 
