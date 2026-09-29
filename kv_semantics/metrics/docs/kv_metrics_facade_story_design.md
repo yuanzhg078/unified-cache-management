@@ -8,7 +8,7 @@
 
 这套性能数据需要在独立 `kv-test` 和 UCM `AsuStore` 两种运行场景下都能被采集和查看。相同的 KV 操作在两种场景中应使用一致的指标名称、单位和统计含义，便于对比与持续监控。指标能力应由宿主按需启用；关闭时，KV 请求仍按原有语义执行，性能埋点不应影响正常 I/O 结果。
 
-本 Story 覆盖现有 KV 埋点在两种运行场景中的采集接入、指标定义对齐及结果导出。它不改变 KV 请求的执行语义，也不承担 Prometheus 服务部署或监控面板建设。
+本 Story 覆盖现有 KV 埋点在两种运行场景中的采集接入、指标定义对齐、结果导出，以及 KV client Grafana 面板模板的查询适配。它不改变 KV 请求的执行语义；Prometheus 和 Grafana 服务的安装部署由使用方负责。
 
 ## 2. Story 背景描述
 
@@ -170,24 +170,24 @@ classDiagram
     direction TB
     class KvMetricsBackend {
         <<interface>>
-        +UpdateStats(metric, value)
-        +UpdateStats(updates, count)
-        +RegisterMetricLabels(name, labels)
-        +Flush()
-        +Stop()
+        +UpdateStats(metric: CachedMetric&, value: double) void
+        +UpdateStats(updates: const MetricUpdate*, count: size_t) void
+        +RegisterMetricLabels(name: string, labels: MetricLabels) bool
+        +Flush() void
+        +Stop() void
     }
     class StandaloneKvMetricsBackend {
         -StandaloneMetricsConfig config_
         -unique_ptr collector_
         -unique_ptr server_
         -string error_
-        +Initialize(descriptors)
-        +UpdateStats(metric, value)
-        +UpdateStats(updates, count)
-        +RegisterMetricLabels(name, labels)
-        +Flush()
-        +Stop()
-        +LastError()
+        +Initialize(descriptors: MetricDescriptorList) bool
+        +UpdateStats(metric: CachedMetric&, value: double) void
+        +UpdateStats(updates: const MetricUpdate*, count: size_t) void
+        +RegisterMetricLabels(name: string, labels: MetricLabels) bool
+        +Flush() void
+        +Stop() void
+        +LastError() const string&
     }
     class ThreadBufferedMetricsCollector {
         -descriptors_
@@ -196,20 +196,20 @@ classDiagram
         -buffers_
         -snapshot_
         -aggregator_
-        +Register(descriptor)
-        +RegisterMetricLabels(name, labels)
-        +StartAggregation(intervalMs)
-        +StopAggregation()
-        +UpdateStats(updates, count)
-        +Flush()
-        +Render(prefix, labels)
+        +Register(descriptor: MetricDescriptor, error: string&) bool
+        +RegisterMetricLabels(name: string, labels: MetricLabels) bool
+        +StartAggregation(intervalMs: uint32_t) void
+        +StopAggregation() void
+        +UpdateStats(updates: const MetricUpdate*, count: size_t) void
+        +Flush() void
+        +Render(prefix: string, labels: MetricLabels) string
     }
     class ThreadBuffer {
         -slots[2]
         -writeIndex
         -activeWriteIndex
         -retired
-        +SwitchWriteSlot()
+        +SwitchWriteSlot() int
     }
     class MetricsHttpServer {
         -registry_
@@ -217,8 +217,8 @@ classDiagram
         -running_
         -listenFd_
         -worker_
-        +Start()
-        +Stop()
+        +Start(error: string&) bool
+        +Stop() void
     }
     class CachedMetric {
         -string name_
@@ -226,9 +226,9 @@ classDiagram
         -mutex mutex_
         -unique_ptr owner_
         -atomic binding_
-        +Name()
-        +Labels()
-        +Resolve(factory)
+        +Name() const string&
+        +Labels() const MetricLabels&
+        +Resolve(factory: Factory) Binding*
     }
     class Binding {
         <<interface>>
@@ -246,7 +246,7 @@ classDiagram
     SlotBinding ..|> Binding
 ```
 
-图中只列影响指标写入、聚合和导出的关键成员与接口。Standalone backend 独占 collector 和 HTTP server；collector 持有各业务线程共享的 `ThreadBuffer`，将增量聚合到 `snapshot_`。collector 在首次遇到 KV 句柄时创建 `SlotBinding`，由 `CachedMetric` 持有并缓存对应的 slot；HTTP server 通过 `registry_` 引用 collector，读取累计快照。图中的 `Binding` 对应代码中的 `CachedMetric::Binding`。
+图中只列影响指标写入、聚合和导出的关键成员与接口。`MetricDescriptorList` 是排版简写，对应 `const std::vector<MetricDescriptor>&`；方法签名省略了成员函数自身的 `const` 和 `noexcept` 修饰。Standalone backend 独占 collector 和 HTTP server；collector 持有各业务线程共享的 `ThreadBuffer`，将增量聚合到 `snapshot_`。collector 在首次遇到 KV 句柄时创建 `SlotBinding`，由 `CachedMetric` 持有并缓存对应的 slot；HTTP server 通过 `registry_` 引用 collector，读取累计快照。图中的 `Binding` 对应代码中的 `CachedMetric::Binding`。
 
 **UCM 类图：**
 
@@ -255,18 +255,18 @@ classDiagram
     direction TB
     class KvMetricsBackend {
         <<interface>>
-        +UpdateStats(metric, value)
-        +UpdateStats(updates, count)
-        +RegisterMetricLabels(name, labels)
-        +Flush()
-        +Stop()
+        +UpdateStats(metric: CachedMetric&, value: double) void
+        +UpdateStats(updates: const MetricUpdate*, count: size_t) void
+        +RegisterMetricLabels(name: string, labels: MetricLabels) bool
+        +Flush() void
+        +Stop() void
     }
     class UcmKvMetricsAdapter {
-        +UpdateStats(metric, value)
-        +UpdateStats(updates, count)
-        +RegisterMetricLabels(name, labels)
-        +Flush()
-        +Stop()
+        +UpdateStats(metric: CachedMetric&, value: double) void
+        +UpdateStats(updates: const MetricUpdate*, count: size_t) void
+        +RegisterMetricLabels(name: string, labels: MetricLabels) bool
+        +Flush() void
+        +Stop() void
     }
     class CachedMetric {
         -string name_
@@ -274,9 +274,9 @@ classDiagram
         -mutex mutex_
         -unique_ptr owner_
         -atomic binding_
-        +Name()
-        +Labels()
-        +Resolve(factory)
+        +Name() const string&
+        +Labels() const MetricLabels&
+        +Resolve(factory: Factory) Binding*
     }
     class Binding {
         <<interface>>
@@ -292,9 +292,9 @@ classDiagram
     class UcMetricsCollector {
         -nameToId_
         -registerEpoch_
-        +CreateStats(name, type, buckets)
-        +UpdateStats(nativeMetric, value)
-        +GetAllStatsAndClear()
+        +CreateStats(name: string, type: string, buckets: HistogramBuckets) void
+        +UpdateStats(nativeMetric: UcCachedMetric&, value: double) void
+        +GetAllStatsAndClear() StatsSnapshot
     }
     UcmKvMetricsAdapter ..|> KvMetricsBackend
     UcmKvMetricsAdapter ..> CachedMetric : resolves
@@ -305,7 +305,7 @@ classDiagram
     UcMetricsCollector ..> UcCachedMetric : resolves metric id
 ```
 
-KV `CachedMetric` 保存指标名称、标签和首次解析后缓存的 binding；其中 `owner_` 持有 binding，`binding_` 提供后续更新的快速访问。UCM adapter 本身不保存每个指标的状态，首次写入时创建 `UcmMetricBinding`，由它持有原生 `UC::Metrics::CachedMetric`（图中的 `UcCachedMetric`）。原生句柄保存名称、指标 ID 和注册 epoch；adapter 调用 `UC::Metrics::Metrics`（图中的 `UcMetricsCollector`）写入指标，不拥有该 collector。collector 与 Python exporter 的关系在 4.2 节逻辑模型中展示。
+`HistogramBuckets` 是 `const std::vector<double>&` 的排版简写；`StatsSnapshot` 表示 `UC::Metrics::Metrics::GetAllStatsAndClear()` 返回的 Counter、Gauge 与 Histogram 三元组。图中的方法签名省略了成员函数自身的 `const` 和 `noexcept` 修饰。KV `CachedMetric` 保存指标名称、标签和首次解析后缓存的 binding；其中 `owner_` 持有 binding，`binding_` 提供后续更新的快速访问。UCM adapter 本身不保存每个指标的状态，首次写入时创建 `UcmMetricBinding`，由它持有原生 `UC::Metrics::CachedMetric`（图中的 `UcCachedMetric`）。原生句柄保存名称、指标 ID 和注册 epoch；adapter 调用 `UC::Metrics::Metrics`（图中的 `UcMetricsCollector`）写入指标，不拥有该 collector。collector 与 Python exporter 的关系在 4.2 节逻辑模型中展示。
 
 两张图的 `CachedMetric` 都指 `kv::metrics::CachedMetric`，但它在一个进程中只拥有一种具体 binding。facade 的全局 `shared_ptr<KvMetricsBackend>` 持有所选 backend，`gBackendFast` 是无所有权的热路径指针；宿主如何安装 backend 见 4.4 节上下文模型。当前设计不支持先用 standalone 解析句柄、再切换成 UCM adapter 复用该句柄。
 
@@ -609,6 +609,8 @@ KV client/transport 在两种模式中都使用已有 `KV_METRIC`、`CachedMetri
 
 两种出口的默认前缀不同：standalone 默认 `kv:`，UCM multiproc exporter 默认 `ucm:`。公共查询使用 `ucm:` 前缀，`kv-test` 通过配置采用该前缀，并提供稳定的 `model_name/worker_id` 标签；UCM Python logger 也提供这两个标签。`source` 不属于两端的公共契约。Counter/Histogram 出口比较以最终累计 Prometheus 值为准：standalone `/metrics` 是累计快照，UCM C++ drain 返回增量。
 
+仓库提供 `examples/metrics/grafana_kv_client.json` 作为 KV client 性能面板模板，覆盖吞吐、阶段耗时、错误与超时等视图。模板查询需要与两种出口的公共指标名称及前缀保持一致；依赖 `node_id` 的节点维度面板仅适用于保留该标签的 standalone 路径，UCM 路径以不含 `node_id` 的汇总指标展示。Grafana 模板的维护和查询验证属于本 Story 的交付范围。
+
 ### 7.2 重点实现接口
 
 `DefaultKvMetricDescriptors()`：由生成头提供 standalone 默认描述；KV YAML 是生成输入。`generate_kv_metrics.py --check` 比较 UCM 默认配置和部署模板中的基础名称、类型、Histogram buckets 与 HELP 语义；前缀不写入 C++ 句柄名。
@@ -633,6 +635,7 @@ KV client/transport 在两种模式中都使用已有 `KV_METRIC`、`CachedMetri
 | 前缀只在 exporter 增加 | 两端抓取均出现 `ucm:kv_...`，C++ 句柄仍使用 `kv_...` |
 | UCM 只有统一 dispatcher drain | 同一 worker 不启动第二个 `GetAllStatsAndClear` 消费者；多 consumer 均可收到同一轮增量 |
 | Histogram bucket 与 Python 对象匹配 | 注入一条样本，最终 `_bucket/_sum/_count` 一致，无 bucket mismatch 日志 |
+| KV client Grafana 模板兼容两种出口 | 导入 `grafana_kv_client.json`，分别连接 standalone 和 UCM 指标源；公共吞吐、耗时、错误面板均可查询，节点维度面板只在 standalone 场景显示数据 |
 
 ## 8. Shard 协作关系与 Story 级约束
 
@@ -708,9 +711,9 @@ flowchart LR
 
 ### 10.6 两模式指标口径对照
 
-测试点：基础名称、类型、单位、bucket 和公共查询一致性。
+测试点：基础名称、类型、单位、bucket、公共查询及 Grafana 模板一致性。
 
-测试手段：对 standalone 与 UCM 路径注入相同的逻辑事件，抓取两个最终 Prometheus endpoint；运行配置一致性脚本和公共 PromQL 查询。
+测试手段：对 standalone 与 UCM 路径注入相同的逻辑事件，抓取两个最终 Prometheus endpoint；运行配置一致性脚本和 `grafana_kv_client.json` 使用的公共 PromQL 查询。
 
 预期行为：非节点标签的 KV 指标按相同事件数输出，duration 均为 seconds，Histogram bucket 与 `_count/_sum` 一致；UCM 的两个 node Histogram 按基础名汇总且不出现 `node_id`，此差异明确列在设计契约中。
 
