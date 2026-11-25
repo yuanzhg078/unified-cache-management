@@ -51,6 +51,7 @@ namespace {
 
 using AsuStatus = kv::Status;
 using AsuStatusCode = kv::StatusCode;
+constexpr char kSglangL1Layout[] = "sglang_l1";
 
 // Observe the Store call, including validation failures before KV submission.
 template <typename Call>
@@ -77,6 +78,7 @@ TensorLayout ParseTensorLayout(const std::string& layout)
 {
     if (layout == "gqa") { return TensorLayout::GQA; }
     if (layout == "hma") { return TensorLayout::HMA; }
+    // MLA and SGLang L1 both lay out fragments in shard order.
     return TensorLayout::MLA;
 }
 
@@ -652,8 +654,10 @@ private:
         const auto shardsPerBlock = config.blockSize / config.shardSize;
         std::size_t alignedShardSize = 0;
         for (auto& tensorSize : config.tensorSizes) {
-            tensorSize = AlignUp(tensorSize, kv::kAlignmentBytes);
-            alignedShardSize += tensorSize;
+            const auto alignedSize = AlignUp(tensorSize, kv::kAlignmentBytes);
+            // SGLang's device fragments can occupy consecutive rows with no padding.
+            if (config.tensorLayout != kSglangL1Layout) { tensorSize = alignedSize; }
+            alignedShardSize += alignedSize;
         }
         config.shardSize = alignedShardSize;
         config.blockSize = alignedShardSize * shardsPerBlock;
@@ -751,7 +755,8 @@ private:
                 "asu_trans_provider_backend=fake does not support asu_config_path");
         }
         if (!config.tensorLayout.empty() && config.tensorLayout != "mla" &&
-            config.tensorLayout != "gqa" && config.tensorLayout != "hma") {
+            config.tensorLayout != "gqa" && config.tensorLayout != "hma" &&
+            config.tensorLayout != kSglangL1Layout) {
             return Status::InvalidParam("invalid tensor_layout({})", config.tensorLayout);
         }
         if (config.maxErrorCount == 0 ||
@@ -784,6 +789,13 @@ private:
         if (config.deviceId < 0) { return Status::OK(); }
 
         if (config.tensorSizes.empty()) { return Status::InvalidParam("invalid tensor size"); }
+        if (config.tensorLayout == kSglangL1Layout &&
+            config.transProviderType != kv::TransProviderType::FAKE &&
+            std::any_of(config.tensorSizes.begin(), config.tensorSizes.end(),
+                        [](std::size_t size) { return size % kv::kAlignmentBytes != 0; })) {
+            return Status::InvalidParam("SGLang L1 payload lengths must be 512-byte aligned "
+                                        "with this ASU provider");
+        }
         if (config.tensorLayout == "gqa" &&
             (config.tensorSizes.size() < 2 || config.tensorSizes.size() % 2 != 0)) {
             return Status::InvalidParam("invalid tensor size count({})", config.tensorSizes.size());
@@ -823,9 +835,11 @@ private:
     {
         std::vector<std::size_t> offsets(config_.tensorSizes.size());
         auto offset = shardIndex * config_.shardSize;
+        const bool padOffsets = config_.tensorLayout == kSglangL1Layout;
         for (std::size_t index = 0; index < config_.tensorSizes.size(); ++index) {
             offsets[index] = offset;
-            offset += config_.tensorSizes[index];
+            const auto size = config_.tensorSizes[index];
+            offset += padOffsets ? AlignUp(size, kv::kAlignmentBytes) : size;
         }
         return offsets;
     }

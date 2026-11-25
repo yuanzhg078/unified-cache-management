@@ -120,7 +120,7 @@ static bool IsCacheKeyAllZero(const BinaryKey& key)
 }
 
 static Status VerifyBatchEntry(const std::uint32_t* base, const std::string& log_prefix,
-                               std::uint16_t i)
+                               std::uint16_t i, bool requireAlignedPayload)
 {
     if (base[0] % kAlignmentBytes != 0) {
         return Status::Error(
@@ -144,7 +144,7 @@ static Status VerifyBatchEntry(const std::uint32_t* base, const std::string& log
         return Status::Error(StatusCode::INVALID_ARGUMENT,
                              log_prefix + ": entry[" + std::to_string(i) + "] length is zero");
     }
-    if (entry_length % kAlignmentBytes != 0) {
+    if (requireAlignedPayload && entry_length % kAlignmentBytes != 0) {
         return Status::Error(
             StatusCode::INVALID_ARGUMENT,
             log_prefix + ": entry[" + std::to_string(i) + "] length not 512B aligned");
@@ -189,7 +189,7 @@ Status KvStoreProtocol::ValidateRequest(const KvStoreRequest& r) const
         return Status::Error(StatusCode::INVALID_ARGUMENT,
                              "buffer_length is zero in Store request");
     }
-    if (r.buffer_length % kAlignmentBytes != 0) [[unlikely]] {
+    if (requireAlignedPayload_ && r.buffer_length % kAlignmentBytes != 0) [[unlikely]] {
         return Status::Error(StatusCode::INVALID_ARGUMENT,
                              "buffer_length(" + std::to_string(r.buffer_length) +
                                  ") must be 512B aligned in Store request");
@@ -271,7 +271,7 @@ Status KvStoreProtocol::VerifyPackedBuffer(const std::uint32_t* data, std::size_
     if (buffer_length == 0) {
         return Status::Error(StatusCode::INVALID_ARGUMENT, "Store: buffer_length is zero");
     }
-    if (buffer_length % kAlignmentBytes != 0) {
+    if (requireAlignedPayload_ && buffer_length % kAlignmentBytes != 0) {
         return Status::Error(StatusCode::INVALID_ARGUMENT, "Store: buffer_length not 512B aligned");
     }
 
@@ -329,7 +329,7 @@ Status KvRetrieveProtocol::ValidateRequest(const KvRetrieveRequest& r) const
         return Status::Error(StatusCode::INVALID_ARGUMENT,
                              "buffer_length is zero in Retrieve request");
     }
-    if (r.buffer_length % kAlignmentBytes != 0) [[unlikely]] {
+    if (requireAlignedPayload_ && r.buffer_length % kAlignmentBytes != 0) [[unlikely]] {
         return Status::Error(StatusCode::INVALID_ARGUMENT,
                              "buffer_length(" + std::to_string(r.buffer_length) +
                                  ") must be 512B aligned in Retrieve request");
@@ -402,7 +402,7 @@ Status KvRetrieveProtocol::VerifyPackedBuffer(const std::uint32_t* data, std::si
     if (buffer_length == 0) {
         return Status::Error(StatusCode::INVALID_ARGUMENT, "Retrieve: buffer_length is zero");
     }
-    if (buffer_length % kAlignmentBytes != 0) {
+    if (requireAlignedPayload_ && buffer_length % kAlignmentBytes != 0) {
         return Status::Error(StatusCode::INVALID_ARGUMENT,
                              "Retrieve: buffer_length not 512B aligned");
     }
@@ -529,7 +529,7 @@ Status KvBatchStoreProtocol::ValidateRequest(const KvBatchStoreRequest& r) const
                 StatusCode::INVALID_ARGUMENT,
                 "entry[" + std::to_string(i) + "] length is zero in BatchStore request");
         }
-        if (entry.length % kAlignmentBytes != 0) [[unlikely]] {
+        if (requireAlignedPayload_ && entry.length % kAlignmentBytes != 0) [[unlikely]] {
             return Status::Error(StatusCode::INVALID_ARGUMENT,
                                  "entry[" + std::to_string(i) + "] length(" +
                                      std::to_string(entry.length) +
@@ -625,7 +625,7 @@ Status KvBatchStoreProtocol::VerifyPackedBuffer(const std::uint32_t* data, std::
 
     for (std::uint16_t i = 0; i < batch_number; ++i) {
         const std::uint32_t* base = data + kSqeDwordCount + i * kBatchEntryDwordCount;
-        auto entry_status = VerifyBatchEntry(base, "BatchStore", i);
+        auto entry_status = VerifyBatchEntry(base, "BatchStore", i, requireAlignedPayload_);
         if (!entry_status.ok()) { return entry_status; }
     }
 
@@ -719,7 +719,7 @@ Status KvBatchRetrieveProtocol::ValidateRequest(const KvBatchRetrieveRequest& r)
                 StatusCode::INVALID_ARGUMENT,
                 "entry[" + std::to_string(i) + "] length is zero in BatchRetrieve request");
         }
-        if (entry.length % kAlignmentBytes != 0) [[unlikely]] {
+        if (requireAlignedPayload_ && entry.length % kAlignmentBytes != 0) [[unlikely]] {
             return Status::Error(StatusCode::INVALID_ARGUMENT,
                                  "entry[" + std::to_string(i) + "] length(" +
                                      std::to_string(entry.length) +
@@ -816,7 +816,7 @@ Status KvBatchRetrieveProtocol::VerifyPackedBuffer(const std::uint32_t* data,
 
     for (std::uint16_t i = 0; i < batch_number; ++i) {
         const std::uint32_t* base = data + kSqeDwordCount + i * kBatchEntryDwordCount;
-        auto entry_status = VerifyBatchEntry(base, "BatchRetrieve", i);
+        auto entry_status = VerifyBatchEntry(base, "BatchRetrieve", i, requireAlignedPayload_);
         if (!entry_status.ok()) { return entry_status; }
     }
 
@@ -1198,12 +1198,13 @@ Status KvKeepAliveProtocol::VerifyPackedBuffer(const std::uint32_t* data, std::s
     return Status::OK();
 }
 
-ProtocolManager::ProtocolManager()
+ProtocolManager::ProtocolManager(bool requireAlignedPayload)
 {
-    protocols_[KvOpcode::Store] = std::make_unique<KvStoreProtocol>();
-    protocols_[KvOpcode::Retrieve] = std::make_unique<KvRetrieveProtocol>();
-    protocols_[KvOpcode::BatchStore] = std::make_unique<KvBatchStoreProtocol>();
-    protocols_[KvOpcode::BatchRetrieve] = std::make_unique<KvBatchRetrieveProtocol>();
+    protocols_[KvOpcode::Store] = std::make_unique<KvStoreProtocol>(requireAlignedPayload);
+    protocols_[KvOpcode::Retrieve] = std::make_unique<KvRetrieveProtocol>(requireAlignedPayload);
+    protocols_[KvOpcode::BatchStore] = std::make_unique<KvBatchStoreProtocol>(requireAlignedPayload);
+    protocols_[KvOpcode::BatchRetrieve] =
+        std::make_unique<KvBatchRetrieveProtocol>(requireAlignedPayload);
     protocols_[KvOpcode::Delete] = std::make_unique<KvDeleteProtocol>();
     protocols_[KvOpcode::Exist] = std::make_unique<KvExistProtocol>();
     protocols_[KvOpcode::KeepAlive] = std::make_unique<KvKeepAliveProtocol>();

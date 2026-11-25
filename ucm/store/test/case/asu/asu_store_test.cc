@@ -1443,6 +1443,43 @@ TEST(UCAsuStoreTest, UsesMultiSegmentLayerwiseMlaTensorOffsets)
     }
 }
 
+TEST(UCAsuStoreTest, PreservesSglangFragmentLengthsWithAlignedOffsets)
+{
+    constexpr std::size_t indexerSize = 8448;
+    constexpr std::size_t kvSize = 4096;
+    constexpr std::size_t shardSize = indexerSize + kvSize;
+    constexpr std::size_t alignedIndexerSize = 8704;
+    constexpr std::size_t alignedShardSize = alignedIndexerSize + kvSize;
+
+    UC::AsuStore::AsuStore store;
+    auto state = UseFakeClient(store);
+    auto config = MakeBaseConfig();
+    config.Set("asu_ids", std::vector<ssize_t>{1});
+    config.Set("tensor_layout", std::string{"sglang_l1"});
+    config.SetNumber("tensor_size", std::size_t{0});
+    config.Set("tensor_size_list", std::vector<ssize_t>{indexerSize, kvSize});
+    config.SetNumber("shard_size", shardSize);
+    config.SetNumber("block_size", 2 * shardSize);
+
+    std::array<std::byte, indexerSize> indexer{};
+    std::array<std::byte, kvSize> kvBuffer{};
+    RegisterPersistentRanges(config, {{indexer.data(), indexer.size()},
+                                      {kvBuffer.data(), kvBuffer.size()}});
+    const auto status = store.Setup(config);
+    ASSERT_TRUE(status.Success()) << status.ToString();
+
+    const auto block = UC::Test::Detail::TypesHelper::MakeBlockId("a1b2c3d4e5f6789012345678901234ab");
+    UC::Detail::TaskDesc task;
+    task.push_back(UC::Detail::Shard{block, 1, {indexer.data(), kvBuffer.data()}});
+    auto dump = store.Dump(task);
+    ASSERT_TRUE(dump.HasValue()) << dump.Error().ToString();
+    ASSERT_EQ(state->lastStoreEntries.size(), 2);
+    EXPECT_EQ(state->lastStoreEntries[0].buffer.region.size, indexerSize);
+    EXPECT_EQ(state->lastStoreEntries[0].offset, alignedShardSize);
+    EXPECT_EQ(state->lastStoreEntries[1].buffer.region.size, kvSize);
+    EXPECT_EQ(state->lastStoreEntries[1].offset, alignedShardSize + alignedIndexerSize);
+}
+
 TEST(UCAsuStoreTest, AlignsTensorSizeAndDerivesShardBlockSize)
 {
     UC::AsuStore::AsuStore store;

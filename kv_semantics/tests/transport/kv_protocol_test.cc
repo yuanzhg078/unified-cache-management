@@ -1027,6 +1027,31 @@ TEST_F(ProtocolManagerTest, PackBatchStoreRequest)
     EXPECT_EQ(target[10], 2);
 }
 
+TEST_F(ProtocolManagerTest, AllowsExactFakePayloadLengthAndKeepsOffsetAligned)
+{
+    KvBatchStoreRequest request;
+    request.cid = 1;
+    request.kv_ns_id = 1;
+    request.batch_number = 1;
+    request.entries.resize(1);
+    auto& entry = request.entries[0];
+    entry.key = MakeCacheKey("indexer");
+    entry.offset = 512;
+    entry.buffer_addr = 0x1000;
+    entry.length = 8448;
+
+    ProtocolManager fakeProtocol(false);
+    std::vector<std::uint32_t> buffer(kSqeDwordCount + kBatchEntryDwordCount);
+    EXPECT_FALSE(mgr_->PackRequest(buffer.data(), KvOpcode::BatchStore, request).ok());
+    const auto packed = fakeProtocol.PackRequest(buffer.data(), KvOpcode::BatchStore, request);
+    ASSERT_TRUE(packed.ok()) << packed.message;
+    const auto packedBytes = buffer.size() * sizeof(buffer[0]);
+    EXPECT_TRUE(fakeProtocol.VerifyPackedBuffer(buffer.data(), packedBytes).ok());
+    EXPECT_FALSE(mgr_->VerifyPackedBuffer(buffer.data(), packedBytes).ok());
+    entry.offset = 1;
+    EXPECT_FALSE(fakeProtocol.PackRequest(buffer.data(), KvOpcode::BatchStore, request).ok());
+}
+
 TEST_F(ProtocolManagerTest, PackKeepAliveRequest)
 {
     KvKeepAliveRequest req;

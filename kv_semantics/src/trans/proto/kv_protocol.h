@@ -176,6 +176,10 @@ public:
 
 class KvProtocol {
 public:
+    explicit KvProtocol(bool requireAlignedPayload = true)
+        : requireAlignedPayload_(requireAlignedPayload)
+    {
+    }
     virtual ~KvProtocol() = default;
 
     virtual Status PackSqe(const SqeRequest& req, std::uint32_t* target) = 0;
@@ -188,10 +192,14 @@ public:
     }
 
     virtual Status VerifyPackedBuffer(const std::uint32_t* data, std::size_t length) const = 0;
+
+protected:
+    const bool requireAlignedPayload_;
 };
 
 class KvStoreProtocol : public KvProtocol {
 public:
+    using KvProtocol::KvProtocol;
     Status PackSqe(const SqeRequest& req, std::uint32_t* target) override;
     std::size_t PackedSize(const SqeRequest& req) const override
     {
@@ -207,6 +215,7 @@ private:
 
 class KvRetrieveProtocol : public KvProtocol {
 public:
+    using KvProtocol::KvProtocol;
     Status PackSqe(const SqeRequest& req, std::uint32_t* target) override;
     std::size_t PackedSize(const SqeRequest& req) const override
     {
@@ -222,6 +231,7 @@ private:
 
 class KvBatchStoreProtocol : public KvProtocol {
 public:
+    using KvProtocol::KvProtocol;
     Status PackSqe(const SqeRequest& req, std::uint32_t* target) override;
     std::size_t PackedSize(const SqeRequest& req) const override;
     Status UnpackCqe(const std::uint32_t* data, std::uint16_t batch_number,
@@ -235,6 +245,7 @@ private:
 
 class KvBatchRetrieveProtocol : public KvProtocol {
 public:
+    using KvProtocol::KvProtocol;
     Status PackSqe(const SqeRequest& req, std::uint32_t* target) override;
     std::size_t PackedSize(const SqeRequest& req) const override;
     Status UnpackCqe(const std::uint32_t* data, std::uint16_t batch_number,
@@ -287,7 +298,7 @@ private:
 
 class ProtocolManager {
 public:
-    ProtocolManager();
+    explicit ProtocolManager(bool requireAlignedPayload = true);
     ~ProtocolManager() = default;
 
     ProtocolManager(const ProtocolManager&) = delete;

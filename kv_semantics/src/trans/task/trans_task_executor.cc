@@ -41,6 +41,7 @@ TransportTaskExecutor::TransportTaskExecutor(
     : config_(config),
       ioScheduler_(config),
       transProvider_(transProvider),
+      protocolManager_(config.providerType != TransProviderType::FAKE),
       connManager_(connectionManager),
       asuSendMetric_("kv_transport_node_task_send_duration_seconds",
                      {

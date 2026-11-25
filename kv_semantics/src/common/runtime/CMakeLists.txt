@@ -2,9 +2,11 @@ if(RUNTIME_ENVIRONMENT STREQUAL "simu")
     add_subdirectory(simu)
 elseif(RUNTIME_ENVIRONMENT STREQUAL "ascend")
     add_subdirectory(ascend)
+elseif(RUNTIME_ENVIRONMENT STREQUAL "cuda")
+    add_subdirectory(cuda)
 else()
     message(FATAL_ERROR
-        "kv_buffer_runtime requires RUNTIME_ENVIRONMENT=simu or ascend. Current value: ${RUNTIME_ENVIRONMENT}")
+        "kv_buffer_runtime requires RUNTIME_ENVIRONMENT=simu, ascend, or cuda. Current value: ${RUNTIME_ENVIRONMENT}")
 endif()
 
 target_include_directories(kv_buffer_runtime

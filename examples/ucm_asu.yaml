@@ -1,0 +1,15 @@
+# Default configuration for sglang_asu_mix.sh with a CUDA ASU build.
+ucm_connectors:
+  - ucm_connector_name: UcmPipelineStore
+    ucm_connector_config:
+      store_pipeline: "ASU"
+      # Use a directory writable by the SGLang workers.
+      storage_backends: "/mnt/ucm-cache"
+
+      asu_mode: "client"
+      asu_client_id: "ucm-sglang-mix"
+      asu_trans_provider_backend: "fake"
+      asu_fake_backend_path: "/mnt/ucm-cache/asu-fake"
+      asu_fake_backend_complete_immediately: false
+      asu_ids: [1]
+      kv_ns_ids: [100]
