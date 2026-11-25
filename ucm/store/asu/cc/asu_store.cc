@@ -24,6 +24,7 @@
 #include "asu_store.h"
 #include <algorithm>
 #include <any>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cstddef>
@@ -35,6 +36,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include "kv_client.h"
 #include "kv_metrics/ucm_metrics_backend.h"
@@ -45,13 +47,14 @@
 
 namespace UC::AsuStore {
 
-enum class TensorLayout { MLA, GQA, HMA };
+enum class TensorLayout { MLA, GQA, HMA, SGLANG_L1 };
 
 namespace {
 
 using AsuStatus = kv::Status;
 using AsuStatusCode = kv::StatusCode;
 constexpr char kSglangL1Layout[] = "sglang_l1";
+constexpr std::string_view kSglangL1KeyVersion = "sglang_l1:kv-first:v1:";
 
 // Observe the Store call, including validation failures before KV submission.
 template <typename Call>
@@ -78,7 +81,7 @@ TensorLayout ParseTensorLayout(const std::string& layout)
 {
     if (layout == "gqa") { return TensorLayout::GQA; }
     if (layout == "hma") { return TensorLayout::HMA; }
-    // MLA and SGLang L1 both lay out fragments in shard order.
+    if (layout == kSglangL1Layout) { return TensorLayout::SGLANG_L1; }
     return TensorLayout::MLA;
 }
 
@@ -93,9 +96,17 @@ std::uint64_t HashAsuKey(const Detail::BlockId& block)
     return static_cast<std::uint64_t>(hasher(block));
 }
 
-kv::CacheKey MakeAsuKey(const Detail::BlockId& block)
+kv::CacheKey MakeAsuKey(const Detail::BlockId& block, TensorLayout layout)
 {
-    const auto hash = HashAsuKey(block);
+    std::uint64_t hash;
+    if (layout == TensorLayout::SGLANG_L1) {
+        std::array<char, kSglangL1KeyVersion.size() + Detail::BlockId{}.size()> identity;
+        std::memcpy(identity.data(), kSglangL1KeyVersion.data(), kSglangL1KeyVersion.size());
+        std::memcpy(identity.data() + kSglangL1KeyVersion.size(), block.data(), block.size());
+        hash = std::hash<std::string_view>{}(std::string_view(identity.data(), identity.size()));
+    } else {
+        hash = HashAsuKey(block);
+    }
     kv::BinaryKey key{};
     std::memcpy(key.data(), &hash, key.size());
     return kv::CacheKey::FromBytes(key);
@@ -835,11 +846,25 @@ private:
     {
         std::vector<std::size_t> offsets(config_.tensorSizes.size());
         auto offset = shardIndex * config_.shardSize;
-        const bool padOffsets = config_.tensorLayout == kSglangL1Layout;
         for (std::size_t index = 0; index < config_.tensorSizes.size(); ++index) {
             offsets[index] = offset;
-            const auto size = config_.tensorSizes[index];
-            offset += padOffsets ? AlignUp(size, kv::kAlignmentBytes) : size;
+            offset += config_.tensorSizes[index];
+        }
+        return offsets;
+    }
+
+    std::vector<std::size_t> BuildSglangL1TensorOffsets(std::size_t shardIndex) const
+    {
+        std::vector<std::size_t> offsets(config_.tensorSizes.size());
+        const auto shardCount = ShardsPerBlock();
+        std::size_t fragmentBase = 0;
+        // Each fragment gets a range covering all shards. DSA supplies Indexer then KV,
+        // so visiting fragment positions in reverse places the KV range first.
+        for (std::size_t remaining = offsets.size(); remaining > 0; --remaining) {
+            const auto index = remaining - 1;
+            const auto stride = AlignUp(config_.tensorSizes[index], kv::kAlignmentBytes);
+            offsets[index] = fragmentBase + shardIndex * stride;
+            fragmentBase += shardCount * stride;
         }
         return offsets;
     }
@@ -890,6 +915,7 @@ private:
             case TensorLayout::MLA: return BuildMlaTensorOffsets(shardIndex);
             case TensorLayout::GQA: return BuildGqaTensorOffsets(shardIndex);
             case TensorLayout::HMA: return BuildHmaTensorOffsets(shardIndex);
+            case TensorLayout::SGLANG_L1: return BuildSglangL1TensorOffsets(shardIndex);
         }
         throw std::logic_error("unhandled ASU tensor layout");
     }
@@ -940,7 +966,7 @@ private:
         std::vector<kv::CacheKey> keys;
         keys.reserve(num);
         for (std::size_t blockIndex = 0; blockIndex < num; ++blockIndex) {
-            keys.emplace_back(MakeAsuKey(blocks[blockIndex]));
+            keys.emplace_back(MakeAsuKey(blocks[blockIndex], tensorLayout_));
         }
         return keys;
     }
@@ -958,9 +984,10 @@ private:
                 return Status::InvalidParam("invalid tensor addr count({})", shard.addrs.size());
             }
             const auto tensorOffsets = BuildTensorOffsets(shard.index);
+            const auto key = MakeAsuKey(shard.owner, tensorLayout_);
             for (std::size_t tensorIndex = 0; tensorIndex < shard.addrs.size(); ++tensorIndex) {
                 kv::KVBuffer entry;
-                entry.key = MakeAsuKey(shard.owner);
+                entry.key = key;
                 entry.buffer.region.memoryType = kv::MemoryType::DEVICE;
                 entry.buffer.region.addr =
                     reinterpret_cast<std::uint64_t>(shard.addrs[tensorIndex]);

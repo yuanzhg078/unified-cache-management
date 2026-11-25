@@ -1443,13 +1443,11 @@ TEST(UCAsuStoreTest, UsesMultiSegmentLayerwiseMlaTensorOffsets)
     }
 }
 
-TEST(UCAsuStoreTest, PreservesSglangFragmentLengthsWithAlignedOffsets)
+TEST(UCAsuStoreTest, SglangL1UsesKvFirstOffsetsAndVersionedKeys)
 {
     constexpr std::size_t indexerSize = 8448;
+    constexpr std::size_t indexerStride = 8704;
     constexpr std::size_t kvSize = 4096;
-    constexpr std::size_t shardSize = indexerSize + kvSize;
-    constexpr std::size_t alignedIndexerSize = 8704;
-    constexpr std::size_t alignedShardSize = alignedIndexerSize + kvSize;
 
     UC::AsuStore::AsuStore store;
     auto state = UseFakeClient(store);
@@ -1458,26 +1456,53 @@ TEST(UCAsuStoreTest, PreservesSglangFragmentLengthsWithAlignedOffsets)
     config.Set("tensor_layout", std::string{"sglang_l1"});
     config.SetNumber("tensor_size", std::size_t{0});
     config.Set("tensor_size_list", std::vector<ssize_t>{indexerSize, kvSize});
-    config.SetNumber("shard_size", shardSize);
-    config.SetNumber("block_size", 2 * shardSize);
+    config.SetNumber("shard_size", indexerSize + kvSize);
+    config.SetNumber("block_size", 2 * (indexerSize + kvSize));
 
-    std::array<std::byte, indexerSize> indexer{};
-    std::array<std::byte, kvSize> kvBuffer{};
-    RegisterPersistentRanges(config, {{indexer.data(), indexer.size()},
-                                      {kvBuffer.data(), kvBuffer.size()}});
+    std::array<std::array<std::byte, indexerSize>, 2> indexer{};
+    std::array<std::array<std::byte, kvSize>, 2> kvBuffers{};
+    RegisterPersistentRanges(config, {{indexer.data(), sizeof(indexer)},
+                                      {kvBuffers.data(), sizeof(kvBuffers)}});
     const auto status = store.Setup(config);
     ASSERT_TRUE(status.Success()) << status.ToString();
 
     const auto block = UC::Test::Detail::TypesHelper::MakeBlockId("a1b2c3d4e5f6789012345678901234ab");
     UC::Detail::TaskDesc task;
-    task.push_back(UC::Detail::Shard{block, 1, {indexer.data(), kvBuffer.data()}});
+    for (std::size_t layer = 0; layer < 2; ++layer) {
+        task.push_back(UC::Detail::Shard{block, layer,
+                                         {indexer[layer].data(), kvBuffers[layer].data()}});
+    }
     auto dump = store.Dump(task);
     ASSERT_TRUE(dump.HasValue()) << dump.Error().ToString();
-    ASSERT_EQ(state->lastStoreEntries.size(), 2);
-    EXPECT_EQ(state->lastStoreEntries[0].buffer.region.size, indexerSize);
-    EXPECT_EQ(state->lastStoreEntries[0].offset, alignedShardSize);
-    EXPECT_EQ(state->lastStoreEntries[1].buffer.region.size, kvSize);
-    EXPECT_EQ(state->lastStoreEntries[1].offset, alignedShardSize + alignedIndexerSize);
+    const auto& written = state->lastStoreEntries;
+    ASSERT_EQ(written.size(), 4);
+    const auto& key = written.front().key;
+    EXPECT_NE(key, UC::AsuStore::MakeAsuKey(block, UC::AsuStore::TensorLayout::MLA));
+    const std::array<std::uint32_t, 4> expectedOffsets{
+        2 * kvSize, 0, 2 * kvSize + indexerStride, kvSize,
+    };
+    const std::array<std::size_t, 4> expectedSizes{indexerSize, kvSize, indexerSize, kvSize};
+    for (std::size_t i = 0; i < written.size(); ++i) {
+        EXPECT_EQ(written[i].key, key);
+        EXPECT_EQ(written[i].offset, expectedOffsets[i]);
+        EXPECT_EQ(written[i].buffer.region.size, expectedSizes[i]);
+    }
+    EXPECT_EQ(written[0].buffer.region.addr,
+              reinterpret_cast<std::uintptr_t>(indexer[0].data()));
+    EXPECT_EQ(written[1].buffer.region.addr,
+              reinterpret_cast<std::uintptr_t>(kvBuffers[0].data()));
+
+    auto hit = store.LookupOnPrefix(&block, 1);
+    ASSERT_TRUE(hit.HasValue()) << hit.Error().ToString();
+    EXPECT_EQ(hit.Value(), 0);
+
+    auto load = store.Load(UC::Detail::TaskDesc{task.back()});
+    ASSERT_TRUE(load.HasValue()) << load.Error().ToString();
+    ASSERT_EQ(state->lastLoadEntries.size(), 2);
+    EXPECT_EQ(state->lastLoadEntries[0].key, key);
+    EXPECT_EQ(state->lastLoadEntries[0].offset, expectedOffsets[2]);
+    EXPECT_EQ(state->lastLoadEntries[1].key, key);
+    EXPECT_EQ(state->lastLoadEntries[1].offset, expectedOffsets[3]);
 }
 
 TEST(UCAsuStoreTest, AlignsTensorSizeAndDerivesShardBlockSize)
