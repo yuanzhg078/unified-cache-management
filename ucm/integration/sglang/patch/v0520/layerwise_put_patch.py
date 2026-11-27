@@ -60,7 +60,7 @@ def _layerwise_save_skip_reason(model_runner) -> str | None:
     # The target setter runs before packed draft fragments are written.
     if model_runner.is_draft_worker or model_runner.mtp_draft_device_pools:
         return "draft KV fragments are written separately"
-    if model_runner.server_args.nnodes != 1 or model_runner.ps.pp_size != 1:
+    if model_runner.server_args.nnodes != 1 or parallel.pp_size != 1:
         return "requires one node and PP=1"
     if parallel.attn_cp_size != 1 and not interleave_cp:
         return f"prefill CP requires interleave, got {parallel.cp_strategy}"

@@ -477,7 +477,7 @@ def test_mix_interleave_cp_prefill_accepts_both_dsa_setter_paths(monkeypatch):
         self_attn = SimpleNamespace(use_dsa=True, skip_topk=True)
 
     parallel = SimpleNamespace(
-        attn_cp_size=8, enable_prefill_cp=True, cp_strategy="interleave"
+        pp_size=1, attn_cp_size=8, enable_prefill_cp=True, cp_strategy="interleave"
     )
     kernel = SimpleNamespace(dsa_prefill_backend="flashmla_kv")
     deps = {
@@ -505,7 +505,6 @@ def test_mix_interleave_cp_prefill_accepts_both_dsa_setter_paths(monkeypatch):
         is_draft_worker=False,
         mtp_draft_device_pools=(),
         server_args=SimpleNamespace(nnodes=1),
-        ps=SimpleNamespace(pp_size=1),
         token_to_kv_pool_allocator=PagedAllocator(),
         token_to_kv_pool=DSAPool(),
         model=SimpleNamespace(modules=lambda: [DecoderLayer()]),
@@ -514,6 +513,9 @@ def test_mix_interleave_cp_prefill_accepts_both_dsa_setter_paths(monkeypatch):
     assert patch_module._layerwise_save_skip_reason(runner) is None
     kernel.dsa_prefill_backend = "trtllm"
     assert patch_module._layerwise_save_skip_reason(runner) is None
+    parallel.pp_size = 2
+    assert "PP=1" in patch_module._layerwise_save_skip_reason(runner)
+    parallel.pp_size = 1
     runner.mtp_draft_device_pools = (object(),)
     assert "draft KV" in patch_module._layerwise_save_skip_reason(runner)
     runner.mtp_draft_device_pools = ()
