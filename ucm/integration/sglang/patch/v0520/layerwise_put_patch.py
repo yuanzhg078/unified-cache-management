@@ -8,6 +8,10 @@ from functools import wraps
 
 import torch
 
+from ucm.logger import init_logger
+
+logger = init_logger(__name__)
+
 _scheduled_save = ContextVar("ucm_scheduled_save", default=None)
 _active_saver = ContextVar("ucm_active_saver", default=None)
 _replaying_graph = ContextVar("ucm_replaying_prefill_graph", default=None)
@@ -164,6 +168,9 @@ def bind(cache, worker, linker):
         or set(linker.pools) != {PoolName.KV, PoolName.INDEXER}
         or (graph is not None and not getattr(graph, "_ucm_layerwise_put", False))
     ):
+        logger.warning(
+            "UCM layerwise saver not enabled for this model, pool layout, or prefill graph"
+        )
         return
 
     cache._ucm_layerwise_put = _CachePut(cache, linker)
@@ -201,6 +208,12 @@ def bind(cache, worker, linker):
     allocator._release_page_ids = release_page_ids
     linker.release_source_pages = lambda ids: release(
         torch.tensor(ids, dtype=torch.int64, device=allocator.device)
+    )
+    logger.info(
+        "UCM layerwise saver enabled: tp_rank=%d writer=%s prefill_graph=%s",
+        linker._tp_rank,
+        linker._save_owner,
+        graph is not None,
     )
 
 

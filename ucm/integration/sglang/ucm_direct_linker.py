@@ -1187,6 +1187,7 @@ class UcmLayerWiseLinker(UcmDirectLinker):
         self._deferred_free: set[int] = set()
         self.release_source_pages = None
         self._accept_saves = True
+        self._logged_first_layer_put = False
         super().__init__(*args, **kwargs)
         self._save_owner = self._tp_rank == self._dump_ranks[0]
         self._save_layers = frozenset(
@@ -1362,6 +1363,15 @@ class UcmLayerWiseLinker(UcmDirectLinker):
             )
         if tasks:
             self.put_wait_queue.put((work, tasks, error is None))
+            if error is None and not self._logged_first_layer_put:
+                self._logged_first_layer_put = True
+                logger.info(
+                    "UCM layerwise saver submitted first PUT: tp_rank=%d batch=%d layer=%d pages=%d",
+                    self._tp_rank,
+                    work.save_index,
+                    work.layer_id,
+                    len(plan.page_ids),
+                )
         else:
             self._finish_save_layer(work.save_index, False)
         return True
