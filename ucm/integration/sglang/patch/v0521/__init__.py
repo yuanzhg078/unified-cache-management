@@ -51,5 +51,11 @@ def apply() -> None:
 
         unified_cache_linker.LayerWiseLoadCounter = LayerWiseLoadCounter
     server_args_patch.apply()
-    registry_patch.apply()
+    # v0521 also serves 0.5.22. The layerwise PUT hooks are enabled on 0.5.21.
+    enable_layerwise_put = version.strip().startswith("0.5.21")
+    registry_patch.apply(enable_layerwise_put=enable_layerwise_put)
+    if enable_layerwise_put:
+        from ucm.integration.sglang.patch.v0520 import layerwise_put_patch
+
+        layerwise_put_patch.apply()
     logger.info("Applied UCM SGLang dynamic linker patch for %s.", version)

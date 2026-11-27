@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 
-def apply() -> None:
+def apply(*, enable_layerwise_put: bool = False) -> None:
     from sglang.srt.mem_cache import registry
 
     original = registry.create_unified_radix_cache
@@ -60,18 +60,23 @@ def apply() -> None:
         cache = (cache_class or UnifiedRadixCache)(params)
         model_runner = getattr(ctx.tp_worker, "model_runner", None)
         forward_stream = getattr(model_runner, "forward_stream", None)
-        cache.init_cache_linker(
-            create_dynamic_linker(
-                server_args,
-                params,
-                components=set(cache.components),
-                forward_stream=forward_stream,
-            )
+        linker = create_dynamic_linker(
+            server_args,
+            params,
+            components=set(cache.components),
+            forward_stream=forward_stream,
         )
+        cache.init_cache_linker(linker)
         counter = cache.linker.layer_done_counter
         kvcache = params.token_to_kv_pool_allocator.get_kvcache()
         kvcache.register_layer_transfer_counter(counter)
         ctx.tp_worker.register_hicache_layer_transfer_counter(counter)
+        if enable_layerwise_put and getattr(linker, "layerwise_save_enabled", False):
+            from ucm.integration.sglang.patch.v0520 import layerwise_put_patch
+            from ucm.integration.sglang.ucm_direct_linker import UcmLayerWiseLinker
+
+            if isinstance(linker, UcmLayerWiseLinker):
+                layerwise_put_patch.bind(cache, ctx.tp_worker, linker)
         return cache
 
     create_unified_radix_cache._ucm_patched = True
