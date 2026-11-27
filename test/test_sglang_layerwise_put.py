@@ -424,7 +424,7 @@ def test_breakable_hooks_capture_boundaries_and_use_live_replay_context(monkeypa
             sys.modules, f"sglang.srt.{module}", SimpleNamespace(**exports)
         )
     monkeypatch.setattr(patch_module, "_selected", lambda _: True)
-    monkeypatch.setattr(patch_module, "_eligible_model", lambda _: True)
+    monkeypatch.setattr(patch_module, "_layerwise_save_skip_reason", lambda _: None)
 
     class Runner:
         backend = Backend()
@@ -511,11 +511,50 @@ def test_mix_interleave_cp_prefill_accepts_both_dsa_setter_paths(monkeypatch):
         model=SimpleNamespace(modules=lambda: [DecoderLayer()]),
         model_config=SimpleNamespace(hf_config=object()),
     )
-    assert patch_module._eligible_model(runner)
+    assert patch_module._layerwise_save_skip_reason(runner) is None
     kernel.dsa_prefill_backend = "trtllm"
-    assert patch_module._eligible_model(runner)
+    assert patch_module._layerwise_save_skip_reason(runner) is None
     runner.mtp_draft_device_pools = (object(),)
-    assert not patch_module._eligible_model(runner)
+    assert "draft KV" in patch_module._layerwise_save_skip_reason(runner)
     runner.mtp_draft_device_pools = ()
     parallel.cp_strategy = "zigzag"
-    assert not patch_module._eligible_model(runner)
+    assert "zigzag" in patch_module._layerwise_save_skip_reason(runner)
+
+
+def test_bind_accepts_eager_prefill_runner(monkeypatch, caplog):
+    hicache_storage = SimpleNamespace(PoolName=SimpleNamespace(KV="kv", INDEXER="indexer"))
+    monkeypatch.setitem(
+        sys.modules, "sglang.srt.mem_cache.hicache_storage", hicache_storage
+    )
+    monkeypatch.setattr(patch_module, "_layerwise_save_skip_reason", lambda _: None)
+    linker = SimpleNamespace(
+        pools={"kv": None, "indexer": None},
+        saver=Mock(),
+        _tp_rank=0,
+        _save_owner=True,
+    )
+    cache = SimpleNamespace(
+        protected_size=lambda: 0,
+        token_to_kv_pool_allocator=SimpleNamespace(_release_page_ids=Mock()),
+    )
+    pool = SimpleNamespace(set_mla_kv_buffer=Mock())
+    runner = SimpleNamespace(token_to_kv_pool=pool, eager_runner=object())
+    worker = SimpleNamespace(model_runner=runner)
+
+    runner.prefill_cuda_graph_runner = SimpleNamespace(backend=object())
+    patch_module.bind(cache, worker, linker)
+    assert "prefill graph backend object has no UCM layerwise save hook" in caplog.text
+    assert not hasattr(worker, "_ucm_layerwise_saver")
+
+    runner.prefill_cuda_graph_runner = runner.eager_runner
+    with caplog.at_level("INFO", logger=patch_module.logger.name):
+        patch_module.bind(cache, worker, linker)
+    assert worker._ucm_layerwise_saver is linker.saver
+    assert "writer=True prefill_graph=False" in caplog.text
+
+    token = patch_module._active_saver.set(linker.saver)
+    try:
+        pool.set_mla_kv_buffer(SimpleNamespace(layer_id=3))
+    finally:
+        patch_module._active_saver.reset(token)
+    linker.saver.save_layer.assert_called_once_with(3)

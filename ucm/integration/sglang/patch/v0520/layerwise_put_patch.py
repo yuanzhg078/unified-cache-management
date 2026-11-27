@@ -42,7 +42,7 @@ def _selected(server_args):
     )
 
 
-def _eligible_model(model_runner):
+def _layerwise_save_skip_reason(model_runner) -> str | None:
     from sglang.srt.mem_cache.allocator.paged import PagedTokenToKVPoolAllocator
     from sglang.srt.mem_cache.memory_pool import DSATokenToKVPool
     from sglang.srt.runtime_context import get_exec, get_parallel
@@ -55,20 +55,23 @@ def _eligible_model(model_runner):
         and parallel.enable_prefill_cp
         and parallel.cp_strategy == "interleave"
     )
-    if (
-        torch.device(model_runner.device).type != "cuda"
-        or model_runner.is_draft_worker
-        # The target setter runs before packed draft fragments are written.
-        or model_runner.mtp_draft_device_pools
-        or model_runner.server_args.nnodes != 1
-        or model_runner.ps.pp_size != 1
-        or (parallel.attn_cp_size != 1 and not interleave_cp)
-        or type(model_runner.token_to_kv_pool_allocator)
-        is not PagedTokenToKVPoolAllocator
-        or not isinstance(model_runner.token_to_kv_pool, DSATokenToKVPool)
-        or (not interleave_cp and get_exec().kernel.dsa_prefill_backend == "trtllm")
-    ):
-        return False
+    if torch.device(model_runner.device).type != "cuda":
+        return f"requires CUDA, got device {model_runner.device}"
+    # The target setter runs before packed draft fragments are written.
+    if model_runner.is_draft_worker or model_runner.mtp_draft_device_pools:
+        return "draft KV fragments are written separately"
+    if model_runner.server_args.nnodes != 1 or model_runner.ps.pp_size != 1:
+        return "requires one node and PP=1"
+    if parallel.attn_cp_size != 1 and not interleave_cp:
+        return f"prefill CP requires interleave, got {parallel.cp_strategy}"
+    allocator = type(model_runner.token_to_kv_pool_allocator)
+    if allocator is not PagedTokenToKVPoolAllocator:
+        return f"unsupported allocator {allocator.__name__}"
+    pool = type(model_runner.token_to_kv_pool)
+    if not isinstance(model_runner.token_to_kv_pool, DSATokenToKVPool):
+        return f"requires a DSA KV pool, got {pool.__name__}"
+    if not interleave_cp and get_exec().kernel.dsa_prefill_backend == "trtllm":
+        return "TRT-LLM DSA prefill without interleave CP uses a different KV write path"
     from sglang.srt.models.deepseek_v2 import DeepseekV2DecoderLayer
 
     layers = [
@@ -76,7 +79,9 @@ def _eligible_model(model_runner):
         for layer in model_runner.model.modules()
         if isinstance(layer, DeepseekV2DecoderLayer)
     ]
-    return bool(layers) and all(layer.self_attn.use_dsa for layer in layers)
+    if not layers or not all(layer.self_attn.use_dsa for layer in layers):
+        return "requires DeepSeekV2 DSA decoder layers"
+    return None
 
 
 class _CachePut:
@@ -163,14 +168,16 @@ def bind(cache, worker, linker):
 
     runner = worker.model_runner
     graph = runner.prefill_cuda_graph_runner
-    if (
-        not _eligible_model(runner)
-        or set(linker.pools) != {PoolName.KV, PoolName.INDEXER}
-        or (graph is not None and not getattr(graph, "_ucm_layerwise_put", False))
-    ):
-        logger.warning(
-            "UCM layerwise saver not enabled for this model, pool layout, or prefill graph"
-        )
+    # A disabled prefill graph can be represented by the eager runner itself.
+    has_graph = graph is not None and graph is not getattr(runner, "eager_runner", None)
+    reason = _layerwise_save_skip_reason(runner)
+    if reason is None and set(linker.pools) != {PoolName.KV, PoolName.INDEXER}:
+        reason = f"requires KV and Indexer pools, got {list(linker.pools)}"
+    if reason is None and has_graph and not getattr(graph, "_ucm_layerwise_put", False):
+        backend = type(getattr(graph, "backend", graph)).__name__
+        reason = f"prefill graph backend {backend} has no UCM layerwise save hook"
+    if reason is not None:
+        logger.warning("UCM layerwise saver not enabled: %s", reason)
         return
 
     cache._ucm_layerwise_put = _CachePut(cache, linker)
@@ -213,7 +220,7 @@ def bind(cache, worker, linker):
         "UCM layerwise saver enabled: tp_rank=%d writer=%s prefill_graph=%s",
         linker._tp_rank,
         linker._save_owner,
-        graph is not None,
+        has_graph,
     )
 
 
@@ -300,7 +307,7 @@ def _patch_graph(runner_cls):
         self._ucm_layerwise_put = (
             _selected(self.model_runner.server_args)
             and isinstance(self.backend, BreakableCudaGraphBackend)
-            and _eligible_model(self.model_runner)
+            and _layerwise_save_skip_reason(self.model_runner) is None
         )
         if not self._ucm_layerwise_put:
             return capture(self, *args, **kwargs)
