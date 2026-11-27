@@ -104,6 +104,13 @@ def apply() -> None:
             kvcache = params.token_to_kv_pool_allocator.get_kvcache()
             kvcache.register_layer_transfer_counter(counter)
             ctx.tp_worker.register_hicache_layer_transfer_counter(counter)
+            if getattr(linker, "layerwise_save_enabled", False):
+                from ucm.integration.sglang.ucm_direct_linker import UcmLayerWiseLinker
+
+                from . import layerwise_put_patch
+
+                if isinstance(linker, UcmLayerWiseLinker):
+                    layerwise_put_patch.bind(cache, ctx.tp_worker, linker)
         return cache
 
     create_unified_radix_cache._ucm_patched = True

@@ -12,7 +12,7 @@ import threading
 import time
 from collections import OrderedDict, deque
 from concurrent.futures import Future
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from queue import Empty, Queue
 from typing import Any
 
@@ -42,6 +42,7 @@ logger = init_logger(__name__)
 device_module = get_device_module()
 _LOOKUP_PROGRESS_MAX_REQUESTS = 128
 _OFFLOAD_POLL_INTERVAL_S = 0.005
+_LAYERWISE_POLL_INTERVAL_S = 0.001
 
 
 def _pool_group_name(pools: tuple[str, ...], shard_bytes: int, shard_count: int) -> str:
@@ -91,6 +92,19 @@ class _PendingOffload:
     transfers: list[UcmLayerTransfer]
     ready_events: list[object]
     result: bool | None = None
+    receipts: set[Future[bool]] | None = None
+
+
+@dataclass(frozen=True)
+class _NodeAck:
+    receipts: set[Future[bool]]
+
+
+@dataclass(frozen=True)
+class _LayerPut:
+    save_index: int
+    layer_id: int
+    ready_event: object
 
 
 @dataclass
@@ -147,9 +161,9 @@ class UcmDirectLinker(UnifiedCacheLinker):
             UnifiedCacheLinker, "finish_layer_wise_loading"
         )
         self._load_results: dict[int, Future[bool]] = {}
-        self._offload_queue: Queue[tuple[list[PoolTransfer], list[object]] | None] = (
-            Queue()
-        )
+        self._offload_queue: Queue[
+            tuple[list[PoolTransfer], list[object]] | _LayerPut | _NodeAck | None
+        ] = Queue()
         self._offload_results: Queue[bool] = Queue()
         self._lookup_progress: OrderedDict[str, _LookupProgress] = OrderedDict()
 
@@ -977,50 +991,31 @@ class UcmDirectLinker(UnifiedCacheLinker):
         # Submit nodes without waiting for earlier Store tasks. Reap completed
         # tasks independently, then publish results in SGLang's node order.
         in_flight: deque[_PendingOffload] = deque()
+        layer_puts: deque[_LayerPut] = deque()
         no_task = object()
         next_poll_at = 0.0
         sequence = 0
 
-        def submit(task: tuple[list[PoolTransfer], list[object]]) -> None:
-            nonlocal sequence
-            sequence += 1
-            expanded, ready_events = task
+        def submit(pending, expanded, ready_events):
             if not expanded:
-                in_flight.append(_PendingOffload(sequence, [], [], [], result=True))
+                pending.result = True
                 return
-            transfers: list[UcmLayerTransfer] = []
             try:
                 prerequisite_handle = self._wait_transfer_events(ready_events)
-                transfers = self._page_transfers(expanded, for_io=True)
-                tasks = self.adapter.submit_offload(
-                    transfers, prerequisite_handle=prerequisite_handle
+                pending.transfers = self._page_transfers(expanded, for_io=True)
+                pending.tasks = self.adapter.submit_offload(
+                    pending.transfers, prerequisite_handle=prerequisite_handle
                 )
             except BaseException:
                 logger.exception(
                     "UCM offload submit failed tp_rank=%d node=%d",
                     self._tp_rank,
-                    sequence,
+                    pending.sequence,
                 )
-                in_flight.append(
-                    _PendingOffload(
-                        sequence=sequence,
-                        tasks=[],
-                        transfers=transfers,
-                        ready_events=[],
-                        result=False,
-                    )
-                )
-                return
-
-            # Keep address arrays alive until every native task is reaped.
-            in_flight.append(
-                _PendingOffload(
-                    sequence=sequence,
-                    tasks=tasks,
-                    transfers=transfers,
-                    ready_events=ready_events,
-                )
-            )
+                pending.result = False
+            else:
+                # Keep address arrays and events alive until the tasks are reaped.
+                pending.ready_events = ready_events
 
         while True:
             try:
@@ -1028,7 +1023,7 @@ class UcmDirectLinker(UnifiedCacheLinker):
                     self._offload_queue.get(
                         timeout=max(0.0, next_poll_at - time.perf_counter())
                     )
-                    if in_flight
+                    if in_flight or layer_puts
                     else self._offload_queue.get()
                 )
             except Empty:
@@ -1038,13 +1033,39 @@ class UcmDirectLinker(UnifiedCacheLinker):
                 self._offload_queue.task_done()
                 return
 
-            if task is not no_task:
-                submit(task)
+            if isinstance(task, _LayerPut):
+                if self._try_submit_layer(task):
+                    self._offload_queue.task_done()
+                else:
+                    layer_puts.append(task)
+                    next_poll_at = min(
+                        next_poll_at, time.perf_counter() + _LAYERWISE_POLL_INTERVAL_S
+                    )
+            elif task is not no_task:
+                sequence += 1
+                pending = _PendingOffload(sequence, [], [], [])
+                in_flight.append(pending)
+                if isinstance(task, _NodeAck):
+                    pending.receipts = task.receipts
+                else:
+                    submit(pending, *task)
 
             now = time.perf_counter()
-            if in_flight and now >= next_poll_at:
+            if (in_flight or layer_puts) and now >= next_poll_at:
+                for _ in range(len(layer_puts)):
+                    layer_put = layer_puts.popleft()
+                    if self._try_submit_layer(layer_put):
+                        self._offload_queue.task_done()
+                    else:
+                        layer_puts.append(layer_put)
                 for pending in in_flight:
                     if pending.result is not None:
+                        continue
+                    if (receipts := pending.receipts) is not None:
+                        if any(f.done() and not f.result() for f in receipts):
+                            pending.result = False
+                        elif all(f.done() for f in receipts):
+                            pending.result = True
                         continue
                     try:
                         completed = all(self.adapter.check(t) for t in pending.tasks)
@@ -1076,13 +1097,17 @@ class UcmDirectLinker(UnifiedCacheLinker):
                     pending.tasks = []
                     pending.transfers = []
                     pending.ready_events = []
-                next_poll_at = time.perf_counter() + _OFFLOAD_POLL_INTERVAL_S
+                next_poll_at = time.perf_counter() + (
+                    _LAYERWISE_POLL_INTERVAL_S
+                    if layer_puts
+                    else _OFFLOAD_POLL_INTERVAL_S
+                )
 
             while in_flight and in_flight[0].result is not None:
                 pending = in_flight.popleft()
                 self._offload_results.put(pending.result)
                 self._offload_queue.task_done()
-            if not in_flight:
+            if not in_flight and not layer_puts:
                 next_poll_at = 0.0
 
     def num_completed_offloads(self) -> int:
@@ -1114,8 +1139,336 @@ class UcmDirectLinker(UnifiedCacheLinker):
             return
         self._closed = True
         self.reset()
+        self._stop_workers()
+        self.adapter.close()
+
+    def _stop_workers(self) -> None:
         self._load_queue.put(None)
         self._offload_queue.put(None)
         self._load_thread.join()
         self._offload_thread.join()
-        self.adapter.close()
+
+
+@dataclass
+class _SavePlan:
+    transfers: list[PoolTransfer]
+    page_ids: set[int]
+    completion: Future[bool]
+    queued_layers: set[int] = field(default_factory=set)
+    outstanding: int = 0
+    forward_success: bool | None = None
+    failed: bool = False
+    settled: bool = False
+    prepared: dict | None = None
+
+
+class LayerwiseSaver:
+    def __init__(self, linker: UcmLayerWiseLinker):
+        self._linker = linker
+        self.producer_index = -1
+        self.consumer_index = -1
+
+    def save_layer(self, layer_id: int) -> None:
+        self._linker._enqueue_save_layer(self.consumer_index, layer_id)
+
+
+class UcmLayerWiseLinker(UcmDirectLinker):
+    layerwise_save_enabled = True
+
+    def __init__(self, *args, **kwargs):
+        self.saver = LayerwiseSaver(self)
+        self.save_plans: dict[int, _SavePlan] = {}
+        self._save_lock = threading.Lock()
+        self.put_wait_queue = Queue()
+        # Source-page bookkeeping is accessed only by the cache-owning thread.
+        self._page_receipts: dict[str, dict[int, Future[bool]]] = {}
+        self._saved_page_keys: dict[int, str] = {}
+        self._pinned_pages: set[int] = set()
+        self._deferred_free: set[int] = set()
+        self.release_source_pages = None
+        self._accept_saves = True
+        super().__init__(*args, **kwargs)
+        self._save_owner = self._tp_rank == self._dump_ranks[0]
+        self._save_layers = frozenset(
+            layer for bundle in self._bundles for layer in bundle.layers
+        )
+        self.put_wait_thread = threading.Thread(
+            target=self._put_wait_worker,
+            daemon=True,
+            name=f"ucm-put-wait-tp{self._tp_rank}",
+        )
+        self.put_wait_thread.start()
+
+    def begin_layerwise_save(self, transfers: list[PoolTransfer]) -> int:
+        if not self._accept_saves:
+            return -1
+        completion = Future()
+        new_pages = set()
+        registrations = {}
+        by_pool: dict[PoolName, list[PoolTransfer]] = {}
+        for transfer in transfers:
+            slots = transfer.device_indices.reshape(-1, self.page_size)
+            page_ids = (slots[:, 0] // self.page_size).tolist()
+            positions = []
+            for position, (key, page_id) in enumerate(
+                zip(transfer.keys, page_ids, strict=True)
+            ):
+                receipts = self._page_receipts.get(key)
+                if key in registrations:
+                    receipt = next(iter(registrations[key].values()))
+                elif receipts:
+                    receipt = next(iter(receipts.values()))
+                else:
+                    receipt = completion
+                    new_pages.add(page_id)
+                    positions.append(position)
+                registrations.setdefault(key, {})[page_id] = receipt
+            if positions and self._save_owner:
+                selected = replace(
+                    transfer,
+                    keys=[transfer.keys[i] for i in positions],
+                    device_indices=slots[positions].reshape(-1),
+                )
+                for item in self._expand([selected]):
+                    by_pool.setdefault(item.name, []).append(item)
+
+        expanded = []
+        merged_indices = {}
+        for items in by_pool.values():
+            if len(items) == 1:
+                expanded.append(items[0])
+                continue
+            # DSA KV and Indexer often refer to the same request slot tensors.
+            sources = tuple(id(item.host_indices) for item in items)
+            if sources not in merged_indices:
+                merged_indices[sources] = torch.cat(
+                    [item.host_indices for item in items]
+                )
+            expanded.append(
+                replace(
+                    items[0],
+                    keys=[key for item in items for key in item.keys],
+                    host_indices=merged_indices[sources],
+                )
+            )
+        for key, receipts in registrations.items():
+            self._page_receipts.setdefault(key, {}).update(receipts)
+            self._saved_page_keys.update((page_id, key) for page_id in receipts)
+        if not new_pages:
+            return -1
+
+        self._pinned_pages.update(new_pages)
+        self.saver.producer_index += 1
+        index = self.saver.producer_index
+        with self._save_lock:
+            self.save_plans[index] = _SavePlan(expanded, new_pages, completion)
+        return index
+
+    def get_layerwise_receipts(self, page_keys) -> set[Future[bool]]:
+        return {
+            receipt
+            for key in page_keys
+            for receipt in self._page_receipts.get(key, {}).values()
+        }
+
+    def _enqueue_save_layer(self, index: int, layer_id: int) -> None:
+        if index < 0 or layer_id not in self._save_layers:
+            return
+        plan = self.save_plans[index]
+        # The forward thread is the sole producer of layer callbacks.
+        if layer_id in plan.queued_layers:
+            return
+        event = None
+        if self._save_owner:
+            event = device_module.Event()
+            event.record()
+        with self._save_lock:
+            plan.queued_layers.add(layer_id)
+            plan.outstanding += 1
+        self._offload_queue.put(_LayerPut(index, layer_id, event))
+
+    def finish_forward(self, save_index: int, success: bool) -> None:
+        with self._save_lock:
+            plan = self.save_plans[save_index]
+            plan.forward_success = success
+            result = self._save_result(plan)
+        if result is not None:
+            plan.completion.set_result(result)
+
+    def _save_result(self, plan: _SavePlan) -> bool | None:
+        # Called with the state lock held. Future callbacks run outside it.
+        if plan.settled or plan.forward_success is None or plan.outstanding:
+            return None
+        plan.settled = True
+        return (
+            plan.forward_success
+            and not plan.failed
+            and plan.queued_layers == self._save_layers
+        )
+
+    def _finish_save_layer(self, index: int, success: bool) -> None:
+        with self._save_lock:
+            plan = self.save_plans[index]
+            plan.failed |= not success
+            plan.outstanding -= 1
+            result = self._save_result(plan)
+        if result is not None:
+            plan.completion.set_result(result)
+
+    def _try_submit_layer(self, work: _LayerPut) -> bool:
+        if not self._save_owner:
+            self._finish_save_layer(work.save_index, True)
+            return True
+        plan = self.save_plans[work.save_index]
+        event = work.ready_event
+        if plan.prepared is None:
+            try:
+                plan.prepared = self.adapter.prepare_offload(
+                    self._page_transfers(
+                        plan.transfers, for_io=True, lazy_addresses=True
+                    )
+                )
+            except Exception:
+                logger.exception(
+                    "UCM layerwise address preparation failed batch=%d", work.save_index
+                )
+                plan.prepared = {}
+        if work.layer_id not in plan.prepared:
+            self._finish_save_layer(work.save_index, False)
+            return True
+        try:
+            handle = 0
+            if self.adapter.supports_transfer_prerequisite:
+                handle = int(getattr(event, "cuda_event", 0) or 0)
+            if not handle and not event.query():
+                return False
+            tasks, error = self.adapter.submit_prepared_offload_layer(
+                plan.prepared, work.layer_id, prerequisite_handle=handle
+            )
+        except Exception:
+            logger.exception(
+                "UCM layerwise PUT failed batch=%d layer=%d",
+                work.save_index,
+                work.layer_id,
+            )
+            self._finish_save_layer(work.save_index, False)
+            return True
+        if error is not None:
+            logger.error(
+                "UCM layerwise PUT submit failed batch=%d layer=%d",
+                work.save_index,
+                work.layer_id,
+                exc_info=error,
+            )
+        if tasks:
+            self.put_wait_queue.put((work, tasks, error is None))
+        else:
+            self._finish_save_layer(work.save_index, False)
+        return True
+
+    def _put_wait_worker(self) -> None:
+        while (item := self.put_wait_queue.get()) is not None:
+            work, tasks, success = item
+            try:
+                self.adapter.wait(tasks)
+            except Exception:
+                logger.exception(
+                    "UCM layerwise PUT wait failed batch=%d layer=%d",
+                    work.save_index,
+                    work.layer_id,
+                )
+                success = False
+            self._finish_save_layer(work.save_index, success)
+            self.put_wait_queue.task_done()
+            del item, work, tasks
+        self.put_wait_queue.task_done()
+
+    def offload(
+        self, transfers: list[PoolTransfer], session_id: str | None = None
+    ) -> bool:
+        if not self._accept_saves:
+            return False
+        kv = next(
+            (transfer for transfer in transfers if transfer.name == PoolName.KV), None
+        )
+        if (
+            kv is None
+            or not kv.keys
+            or not any(key in self._page_receipts for key in kv.keys)
+        ):
+            return super().offload(transfers, session_id)
+        slots = kv.device_indices.reshape(-1, self.page_size)
+        page_ids = (slots[:, 0] // self.page_size).tolist()
+        receipts = [
+            self._page_receipts[key][page_id]
+            for key, page_id in zip(kv.keys, page_ids, strict=True)
+            if self._saved_page_keys.get(page_id) == key
+        ]
+        if not receipts:
+            return super().offload(transfers, session_id)
+        if len(receipts) != len(kv.keys):
+            return False
+        self._freeze_gc_once()
+        self._offload_queue.put(_NodeAck(set(receipts)))
+        return True
+
+    def filter_free_pages(self, page_ids: list[int]) -> list[int]:
+        released = []
+        for page_id in page_ids:
+            if page_id in self._pinned_pages:
+                self._deferred_free.add(page_id)
+                continue
+            if (key := self._saved_page_keys.pop(page_id, None)) is not None:
+                receipts = self._page_receipts[key]
+                del receipts[page_id]
+                if not receipts:
+                    del self._page_receipts[key]
+            released.append(page_id)
+        return released
+
+    def has_saved_pages(self) -> bool:
+        return bool(self._saved_page_keys)
+
+    def deferred_source_tokens(self) -> int:
+        return len(self._deferred_free) * self.page_size
+
+    def num_completed_saves(self) -> int:
+        count = 0
+        for plan in self.save_plans.values():
+            if not plan.completion.done():
+                break
+            count += 1
+        return count
+
+    def take_completed_saves(self, count: int) -> list[bool]:
+        return [
+            plan.completion.result() for plan in list(self.save_plans.values())[:count]
+        ]
+
+    def commit_completed_saves(self, count: int) -> None:
+        released = set()
+        with self._save_lock:
+            for index in list(self.save_plans)[:count]:
+                plan = self.save_plans.pop(index)
+                self._pinned_pages.difference_update(plan.page_ids)
+                released.update(plan.page_ids & self._deferred_free)
+        if released:
+            self._deferred_free.difference_update(released)
+            self.release_source_pages(self.filter_free_pages(sorted(released)))
+
+    def reset(self) -> None:
+        self._accept_saves = False
+        for index, plan in self.save_plans.items():
+            if plan.forward_success is None:
+                self.finish_forward(index, False)
+        super().reset()
+        self.put_wait_queue.join()
+        self.commit_completed_saves(len(self.save_plans))
+        self._page_receipts.clear()
+        self._saved_page_keys.clear()
+        self._accept_saves = not self._closed
+
+    def _stop_workers(self) -> None:
+        super()._stop_workers()
+        self.put_wait_queue.put(None)
+        self.put_wait_thread.join()

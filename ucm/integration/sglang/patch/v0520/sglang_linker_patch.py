@@ -36,4 +36,7 @@ def apply() -> None:
         "ucm.integration.sglang.patch.v0520.registry_patch"
     )
     registry_patch.apply()
+    from . import layerwise_put_patch
+
+    layerwise_put_patch.apply()
     logger.info("Applied UCM SGLang linker patch for %s.", EXPECTED_VERSION)

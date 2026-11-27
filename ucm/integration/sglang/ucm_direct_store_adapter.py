@@ -96,6 +96,14 @@ class _PreparedPipelineTransfer:
             self.store.Dump(ids, indexes, addresses, prerequisite_handle)
         )
 
+    def dump_layer(
+        self, shard_index: int, addresses: np.ndarray, prerequisite_handle: int
+    ) -> Task:
+        indexes = np.full(self.page_count, shard_index, dtype=np.uint64)
+        return self.task_type(
+            self.store.Dump(self.ids, indexes, addresses, prerequisite_handle)
+        )
+
 
 @dataclass(frozen=True)
 class _PreparedStoreTransfer:
@@ -770,6 +778,50 @@ class UcmDirectStoreAdapter:
             for layer in item.shards_by_layer:
                 by_layer.setdefault(layer, []).append(item)
         return by_layer
+
+    def prepare_offload(
+        self, transfers: list[UcmLayerTransfer]
+    ) -> dict[int, list[_PreparedStoreTransfer]]:
+        # Layerwise GET and PUT share the layout, IDs and lazy address builder.
+        return self.prepare_load(transfers)
+
+    def submit_prepared_offload_layer(
+        self,
+        prepared: dict[int, list[_PreparedStoreTransfer]],
+        logical_layer: int,
+        prerequisite_handle: int = 0,
+    ) -> tuple[list[_StoreTask], Exception | None]:
+        tasks = []
+        for item in prepared.get(logical_layer, ()):
+            transfer = item.transfer
+            try:
+                for shard in item.shards_by_layer[logical_layer]:
+                    addresses = (
+                        transfer.address_builder(shard)
+                        if transfer.address_builder is not None
+                        else transfer.addresses[shard]
+                    )
+                    if item.prepared_io is not None:
+                        task = item.prepared_io.dump_layer(
+                            shard, addresses, prerequisite_handle
+                        )
+                    else:
+                        options = (
+                            {"prerequisite_handle": prerequisite_handle}
+                            if prerequisite_handle
+                            else {}
+                        )
+                        task = item.store.dump_data(
+                            item.block_ids,
+                            [shard] * len(item.block_ids),
+                            addresses,
+                            **options,
+                        )
+                    tasks.append(_StoreTask(item.store, task, addresses))
+            except Exception as error:  # noqa: BLE001
+                # The waiter owns any handles already submitted for this layer.
+                return tasks, error
+        return tasks, None
 
     def _submit_dump(
         self,

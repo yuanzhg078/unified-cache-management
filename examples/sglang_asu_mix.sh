@@ -37,7 +37,7 @@ import sys
 
 print(json.dumps({
     "linker_module_path": "ucm.integration.sglang.ucm_direct_linker",
-    "linker": "UcmDirectLinker",
+    "linker": "UcmLayerWiseLinker",
     "linker_extra_config": {"UCM_CONFIG_FILE": os.path.abspath(sys.argv[1])},
 }))
 ' "$ucm_config_file")
