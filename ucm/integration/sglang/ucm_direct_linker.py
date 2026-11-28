@@ -43,6 +43,7 @@ device_module = get_device_module()
 _LOOKUP_PROGRESS_MAX_REQUESTS = 128
 _OFFLOAD_POLL_INTERVAL_S = 0.005
 _LAYERWISE_POLL_INTERVAL_S = 0.001
+_LAYERWISE_PUT_LOG_LIMIT = 3
 
 
 def _pool_group_name(pools: tuple[str, ...], shard_bytes: int, shard_count: int) -> str:
@@ -1187,7 +1188,7 @@ class UcmLayerWiseLinker(UcmDirectLinker):
         self._deferred_free: set[int] = set()
         self.release_source_pages = None
         self._accept_saves = True
-        self._logged_first_layer_put = False
+        self._logged_layer_put_count = 0
         super().__init__(*args, **kwargs)
         self._save_owner = self._tp_rank == self._dump_ranks[0]
         self._save_layers = frozenset(
@@ -1363,15 +1364,16 @@ class UcmLayerWiseLinker(UcmDirectLinker):
             )
         if tasks:
             self.put_wait_queue.put((work, tasks, error is None))
-            if error is None and not self._logged_first_layer_put:
-                self._logged_first_layer_put = True
+            if error is None and self._logged_layer_put_count < _LAYERWISE_PUT_LOG_LIMIT:
                 logger.info(
-                    "UCM layerwise saver submitted first PUT: tp_rank=%d batch=%d layer=%d pages=%d",
+                    "UCM layerwise saver submitted%s PUT: tp_rank=%d batch=%d layer=%d pages=%d",
+                    " first" if self._logged_layer_put_count == 0 else "",
                     self._tp_rank,
                     work.save_index,
                     work.layer_id,
                     len(plan.page_ids),
                 )
+                self._logged_layer_put_count += 1
         else:
             self._finish_save_layer(work.save_index, False)
         return True
